@@ -1,0 +1,13 @@
+# Engine (shared by bot + web)
+aiohttp>=3.9
+python-dotenv>=1.0
+
+# Browser dashboard
+streamlit>=1.32
+streamlit-autorefresh>=1.0.1
+
+# Discord bot UI (only needed for bot mode)
+discord.py>=2.3
+
+# Tests
+pytest>=8.0
