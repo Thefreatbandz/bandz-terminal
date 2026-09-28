@@ -23,9 +23,11 @@ from streamlit_autorefresh import st_autorefresh
 from marketpulse import alerts as alert_store
 from marketpulse import cache, calibration, config
 from marketpulse import sentiment as sentiment_mod
+from marketpulse import themes as theme_mod
 from marketpulse import watchlist as watchlist_store
 from marketpulse.ai import (generate_ai_analysis, generate_market_brief,
                             generate_mover_explanation)
+from marketpulse.charts import big_chart_svg
 from marketpulse.data import FinnhubClient
 from marketpulse.engine import scan_stock, scan_universe, sector_summary
 from marketpulse.format import fmt_change, fmt_price, move_emoji, score_band
@@ -48,183 +50,12 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-# ---------------- blotter styling ----------------
+# ---------------- theme ----------------
+# CSS lives in marketpulse/themes.py. The sidebar radio switches themes
+# and persists the choice to marketpulse/theme.json (gitignored).
 
-st.markdown("""
-<style>
-/* CYBERTECH theme -- neon cyan/magenta HUD on near-black */
-.block-container { padding-top: 1rem; max-width: 1100px; }
-.up { color: #39ff88; } .down { color: #ff3b5c; }
-.flat { color: #8b93a7; } .gold { color: #00e5ff; }
-
-/* backdrop: faint neon grid */
-.stApp { background-color: #04060c;
-  background-image:
-    linear-gradient(rgba(0,229,255,0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0,229,255,0.05) 1px, transparent 1px);
-  background-size: 44px 44px; }
-[data-testid="stSidebar"] { background-color: #060a12; }
-[data-testid="stHeader"] { background-color: rgba(4,6,12,0); }
-
-/* command strip */
-.bz-strip { display: flex; align-items: center; gap: 10px;
-  background: rgba(6,12,22,0.9); border: 1px solid rgba(0,229,255,0.4);
-  padding: 10px 16px; margin-bottom: 10px;
-  box-shadow: 0 0 20px rgba(0,229,255,0.14), inset 0 0 28px rgba(0,229,255,0.05);
-  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px,
-                     100% 100%, 16px 100%, 0 calc(100% - 16px)); }
-.bz-title { font-family: monospace; font-size: 16px; font-weight: 800;
-  letter-spacing: 2px; color: #00e5ff; white-space: nowrap;
-  text-shadow: 0 0 14px rgba(0,229,255,0.9); }
-.bz-badge { font-family: monospace; font-size: 10px; font-weight: 700;
-  letter-spacing: 1px; padding: 4px 10px; border-radius: 3px;
-  white-space: nowrap; }
-.bz-badge.open { color: #39ff88; background: rgba(57,255,136,0.08);
-  border: 1px solid rgba(57,255,136,0.5);
-  box-shadow: 0 0 10px rgba(57,255,136,0.25); }
-.bz-badge.shut { color: #ff3b5c; background: rgba(255,59,92,0.08);
-  border: 1px solid rgba(255,59,92,0.5);
-  box-shadow: 0 0 10px rgba(255,59,92,0.25); }
-.bz-disc { color: #8b93a7; font-size: 11px; margin: 0 0 10px 2px; }
-
-/* index strip */
-.bz-idx { display: grid; grid-template-columns: repeat(4, 1fr);
-  gap: 8px; margin: 0 0 10px 0; }
-.bz-idxc { background: rgba(6,12,22,0.9);
-  border: 1px solid rgba(0,229,255,0.28);
-  padding: 8px 6px; text-align: center;
-  box-shadow: inset 0 0 18px rgba(0,229,255,0.05);
-  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px,
-                     100% 100%, 10px 100%, 0 calc(100% - 10px)); }
-.bz-idxc .s { font-family: monospace; font-size: 10px; font-weight: 700;
-  color: #8b93a7; letter-spacing: 2px; }
-.bz-idxc .p { font-family: monospace; font-size: 15px; font-weight: 700;
-  margin-top: 4px; font-variant-numeric: tabular-nums; color: #e8f6ff; }
-.bz-idxc .c { font-family: monospace; font-size: 11px; font-weight: 700;
-  margin-top: 2px; }
-
-/* ticker tape: neon news ticker */
-.tape-wrap { overflow: hidden; white-space: nowrap;
-  border-top: 1px solid rgba(255,43,214,0.55);
-  border-bottom: 1px solid rgba(255,43,214,0.55);
-  background: rgba(255,43,214,0.04);
-  padding: 7px 0; margin-bottom: 6px; }
-.tape-inner { display: inline-block; animation: tape-scroll 45s linear infinite; }
-@keyframes tape-scroll { from { transform: translateX(0); }
-  to { transform: translateX(-50%); } }
-.tape-item { font-family: monospace; font-size: 13px; margin-right: 26px;
-  color: #ffd7f4; text-shadow: 0 0 8px rgba(255,43,214,0.6); }
-
-/* numbered sections */
-.bz-sec { display: flex; align-items: center; gap: 12px; margin: 26px 0 4px; }
-.bz-num { display: grid; place-items: center; width: 30px; height: 30px;
-  background: rgba(0,229,255,0.1); color: #00e5ff;
-  border: 1px solid rgba(0,229,255,0.6);
-  box-shadow: 0 0 12px rgba(0,229,255,0.35);
-  font-family: monospace; font-size: 11px; font-weight: 800; flex: none;
-  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px,
-                     100% 100%, 8px 100%, 0 calc(100% - 8px)); }
-.bz-sec h2 { margin: 0; font-size: 19px; letter-spacing: 1px;
-  font-family: monospace; color: #e8f6ff;
-  text-shadow: 0 0 10px rgba(0,229,255,0.35); }
-.bz-sub { color: #8b93a7; font-size: 12px; margin: 4px 0 14px 42px; }
-
-/* watch cards: HUD panels */
-.bz-card { background: linear-gradient(180deg, rgba(10,18,32,0.95),
-            rgba(5,9,18,0.95));
-  border: 1px solid rgba(0,229,255,0.28); padding: 16px; margin-bottom: 12px;
-  box-shadow: 0 0 22px rgba(0,229,255,0.10), inset 0 0 30px rgba(0,229,255,0.04);
-  clip-path: polygon(0 0, calc(100% - 20px) 0, 100% 20px,
-                     100% 100%, 20px 100%, 0 calc(100% - 20px)); }
-.bz-top { display: flex; justify-content: space-between; align-items: center; }
-.bz-sym { font-family: monospace; font-size: 16px; font-weight: 800;
-  letter-spacing: 1px; color: #e8f6ff;
-  text-shadow: 0 0 10px rgba(0,229,255,0.5); }
-.bz-chip { font-family: monospace; font-size: 9px; font-weight: 700;
-  color: #00e5ff; border: 1px solid rgba(0,229,255,0.45);
-  padding: 3px 8px; margin-left: 8px; text-transform: uppercase;
-  letter-spacing: 1px; vertical-align: 2px; background: rgba(0,229,255,0.06); }
-.bz-chg { font-family: monospace; font-size: 15px; font-weight: 800;
-  padding: 5px 10px; }
-.bz-chg.up { color: #39ff88; background: rgba(57,255,136,0.10);
-  border: 1px solid rgba(57,255,136,0.45);
-  box-shadow: 0 0 12px rgba(57,255,136,0.25); }
-.bz-chg.down { color: #ff3b5c; background: rgba(255,59,92,0.10);
-  border: 1px solid rgba(255,59,92,0.45);
-  box-shadow: 0 0 12px rgba(255,59,92,0.25); }
-.bz-chg.flat { color: #8b93a7; background: rgba(139,147,167,0.10);
-  border: 1px solid rgba(139,147,167,0.4); }
-.bz-price { font-family: monospace; font-size: 32px; font-weight: 800;
-  letter-spacing: -1px; margin-top: 10px; color: #ffffff;
-  font-variant-numeric: tabular-nums;
-  text-shadow: 0 0 16px rgba(0,229,255,0.45); }
-.bz-spark { width: 100%; height: 60px; margin-top: 10px;
-  background: rgba(0,10,20,0.7); border: 1px solid rgba(0,229,255,0.15);
-  display: block; }
-.bz-label { display: block; color: #8b93a7; font-family: monospace;
-  font-size: 9px; font-weight: 700; letter-spacing: 2px; margin-top: 12px; }
-.bz-bar { height: 6px; background: #0d1626; border-radius: 3px;
-  margin-top: 6px; overflow: hidden;
-  border: 1px solid rgba(0,229,255,0.15); }
-.bz-bar > div { height: 100%; border-radius: 3px;
-  box-shadow: 0 0 8px rgba(0,229,255,0.7); }
-.bz-meta { color: #8b93a7; font-family: monospace; font-size: 11px;
-  margin-top: 10px; line-height: 1.7; }
-.bz-news { margin-top: 12px; border-top: 1px solid rgba(255,43,214,0.3);
-  padding-top: 10px; }
-.bz-news .bz-item { margin-bottom: 8px; }
-.bz-news a { color: #e8f6ff; font-size: 13px; line-height: 1.5;
-  text-decoration: none; }
-.bz-news a:hover { color: #00e5ff; text-shadow: 0 0 8px rgba(0,229,255,0.6); }
-.bz-src { display: block; color: #8b93a7; font-family: monospace;
-  font-size: 10px; font-weight: 600; margin-top: 3px; }
-
-/* news wire */
-.bz-wire { border: 1px solid rgba(0,229,255,0.28);
-  background: rgba(6,12,22,0.9); overflow: hidden;
-  box-shadow: 0 0 18px rgba(0,229,255,0.08); }
-.bz-witem { display: grid; grid-template-columns: 60px 1fr; gap: 10px;
-  padding: 12px 14px; border-bottom: 1px solid rgba(0,229,255,0.12); }
-.bz-witem:last-child { border-bottom: 0; }
-.bz-witem:hover { background: rgba(0,229,255,0.05); }
-.bz-wsym { color: #00e5ff; font-family: monospace; font-size: 11px;
-  font-weight: 800; line-height: 1.5;
-  text-shadow: 0 0 8px rgba(0,229,255,0.7); }
-.bz-witem p { margin: 0; font-size: 12.5px; line-height: 1.45; color: #e8f6ff; }
-.bz-witem p a { color: #e8f6ff; text-decoration: none; }
-.bz-witem p a:hover { color: #00e5ff; }
-.bz-witem small { color: #8b93a7; font-family: monospace; font-size: 10px;
-  font-weight: 600; }
-
-/* heatmap */
-.heat { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
-  gap: 6px; margin: 8px 0 16px 0; }
-.tile { padding: 10px 4px; text-align: center; font-family: monospace;
-  border: 1px solid rgba(0,229,255,0.18); }
-.tile b { display: block; font-size: 14px; color: #e8f6ff; }
-.tile span { font-size: 12px; }
-.heat-label { font-family: monospace; font-size: 11px; color: #00e5ff;
-  margin: 12px 0 2px 0; letter-spacing: 2px; text-transform: uppercase;
-  text-shadow: 0 0 8px rgba(0,229,255,0.5); }
-
-/* streamlit controls: neon */
-[data-testid="stBaseButton-primary"] { background: #00e5ff !important;
-  color: #04060c !important; font-weight: 800 !important;
-  border: none !important; border-radius: 4px !important;
-  box-shadow: 0 0 18px rgba(0,229,255,0.5) !important;
-  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px,
-                     100% 100%, 10px 100%, 0 calc(100% - 10px)); }
-[data-testid="stBaseButton-secondary"] { background: transparent !important;
-  color: #00e5ff !important; border: 1px solid rgba(0,229,255,0.5) !important;
-  border-radius: 4px !important; }
-[data-testid="stExpander"] { border: 1px solid rgba(0,229,255,0.25) !important;
-  background: rgba(6,12,22,0.85) !important; border-radius: 4px !important; }
-[data-testid="stTabs"] button[aria-selected="true"] { color: #00e5ff !important;
-  text-shadow: 0 0 10px rgba(0,229,255,0.7); }
-a { color: #00e5ff !important; }
-a:hover { text-shadow: 0 0 8px rgba(0,229,255,0.6); }
-</style>
-""", unsafe_allow_html=True)
+THEME = theme_mod.load_theme()
+st.markdown(theme_mod.THEME_CSS[THEME], unsafe_allow_html=True)
 
 
 def heat_color(pct):
@@ -462,6 +293,23 @@ def cached_universe_scan(symbols, include_ai=False, news_top_n=None,
     return _run(_go())
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_daily_closes(symbol):
+    """~90 days of daily closes for the full-size chart expander.
+
+    Yahoo-first (Finnhub /stock/candle isn't covered by this plan).
+    """
+    async def _go():
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            closes = await _yahoo_closes(session, symbol, rng="3mo",
+                                         interval="1d")
+            if len(closes) < 2:
+                client = FinnhubClient(session)
+                closes = await client.candles(symbol)
+            return closes
+    return _run(_go())
+
+
 @st.cache_data(ttl=120, show_spinner=False)
 def cached_stock_scan(symbol):
     """Scan one symbol (PennyPulse tab)."""
@@ -472,8 +320,8 @@ def cached_stock_scan(symbol):
     return _run(_go())
 
 
-async def _yahoo_closes(session, symbol):
-    """Sparkline closes via Yahoo's free chart API (no key).
+async def _yahoo_closes(session, symbol, rng="1d", interval="5m"):
+    """Closes via Yahoo's free chart API (no key).
 
     Fallback for when the Finnhub plan doesn't cover /stock/candle.
     """
@@ -485,7 +333,7 @@ async def _yahoo_closes(session, symbol):
     try:
         async with session.get(
             url,
-            params={"interval": "5m", "range": "1d"},
+            params={"interval": interval, "range": rng},
             headers={"User-Agent": "Mozilla/5.0",
                      "Accept-Encoding": "gzip, deflate"},
             timeout=15,
@@ -743,6 +591,12 @@ def watch_card(result, key_prefix=""):
             with st.spinner("Asking Gemini..."):
                 st.session_state[f"analysis-{symbol}"] = explain(
                     symbol, quote, news)
+    with st.expander("📈 Full chart (3 months)"):
+        closes = cached_daily_closes(symbol)
+        if len(closes) >= 2:
+            st.markdown(big_chart_svg(closes), unsafe_allow_html=True)
+        else:
+            st.caption("Chart data unavailable right now.")
     analysis = st.session_state.get(f"analysis-{symbol}")
     if analysis:
         st.markdown(analysis)
@@ -753,6 +607,16 @@ def watch_card(result, key_prefix=""):
 with st.sidebar:
     st.header("Controls")
     universe = st.radio("Universe", ["Core 25", "Everything 🌐", "Custom"])
+
+    theme_label = st.radio(
+        "Theme", ["Cyber", "Gold", "Retro CRT", "Space"],
+        index=["cyber", "gold", "retro", "space"].index(THEME),
+    )
+    theme_key = {"Cyber": "cyber", "Gold": "gold",
+                 "Retro CRT": "retro", "Space": "space"}[theme_label]
+    if theme_key != THEME:
+        theme_mod.save_theme(theme_key)
+        st.rerun()
     custom = ""
     if universe == "Custom":
         custom = st.text_input("Symbols (comma separated)", "NVDA, TSLA")
