@@ -13,7 +13,7 @@ import asyncio
 import html
 import json
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -167,6 +167,53 @@ def index_strip():
         cards.append(
             f'<div class="bz-idxc"><div class="s">{res["symbol"]}</div>'
             f'<div class="p">{fmt_price(q["price"])}</div>'
+            f'<div class="c {cls}">{fmt_change(chg)}</div></div>'
+        )
+    st.markdown(f'<div class="bz-idx">{"".join(cards)}</div>',
+                unsafe_allow_html=True)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_fx():
+    """EUR/USD, GBP/USD, USD/JPY via Yahoo's free chart API.
+
+    Finnhub's forex endpoints are blocked on this plan, so the FX strip
+    is Yahoo-backed (same chart API as the sparklines). Two daily closes
+    give the day-over-day change.
+    """
+    pairs = [("EUR/USD", "EURUSD=X"), ("GBP/USD", "GBPUSD=X"),
+             ("USD/JPY", "USDJPY=X")]
+
+    async def _go():
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            out = []
+            for label, ysym in pairs:
+                closes = await _yahoo_closes(session, ysym, rng="2d",
+                                             interval="1d")
+                if len(closes) >= 2:
+                    price, prev = closes[-1], closes[-2]
+                    chg = (price - prev) / prev * 100 if prev else 0.0
+                    out.append({"label": label, "price": price,
+                                "change": chg})
+            return out
+
+    return _run(_go())
+
+
+def fx_strip():
+    """Currency strip next to the ETF strip: EUR/USD, GBP/USD, USD/JPY."""
+    pairs = cached_fx()
+    if not pairs:
+        return
+    cards = []
+    for p in pairs:
+        chg = p["change"]
+        cls = "up" if chg > 0 else "down" if chg < 0 else "flat"
+        price = p["price"]
+        px = f"{price:,.4f}" if price < 10 else f"{price:,.2f}"
+        cards.append(
+            f'<div class="bz-idxc"><div class="s">💱 {p["label"]}</div>'
+            f'<div class="p">{px}</div>'
             f'<div class="c {cls}">{fmt_change(chg)}</div></div>'
         )
     st.markdown(f'<div class="bz-idx">{"".join(cards)}</div>',
@@ -730,6 +777,7 @@ if missing:
     st.stop()
 
 index_strip()
+fx_strip()
 
 tab_stocks, tab_news, tab_penny, tab_crypto = st.tabs(
     ["🔥 Stocks", "📰 News", "🟣 Penny", "🪙 Crypto"])
@@ -786,6 +834,42 @@ with tab_stocks:
                                key_prefix=f"wl-{w['symbol']}-")
                 else:
                     st.caption(f"{w['symbol']}: no data right now.")
+
+        # Earnings calendar: next 30 days, scanned universe only.
+        section("📅", "Earnings calendar",
+                "Upcoming reports in this universe — next 30 days.")
+        with st.spinner("Loading earnings dates..."):
+            earnings = cached_earnings()
+        universe_syms = {r["symbol"] for r in stock_results}
+        today = date.today()
+        upcoming = []
+        for sym, dstr in earnings.items():
+            if sym not in universe_syms:
+                continue
+            try:
+                d = datetime.strptime(dstr, "%Y-%m-%d").date()
+            except (TypeError, ValueError):
+                continue
+            delta = (d - today).days
+            if 0 <= delta <= 30:
+                upcoming.append((d, sym, delta))
+        upcoming.sort()
+        if upcoming:
+            rows = []
+            for d, sym, delta in upcoming[:30]:
+                when = ("today" if delta == 0 else "tomorrow" if delta == 1
+                        else f"in {delta} days")
+                rows.append(f'<div class="bz-witem"><div class="bz-wsym">'
+                            f'{html.escape(sym)}</div>'
+                            f'<p>{fmt_earnings(d.strftime("%Y-%m-%d"))} '
+                            f'<span class="gold">· {when}</span></p></div>')
+            st.markdown(f'<div class="bz-wire">{"".join(rows)}</div>',
+                        unsafe_allow_html=True)
+            if len(upcoming) > 30:
+                st.caption(f"+{len(upcoming) - 30} more in the next 30 days.")
+        else:
+            st.caption("No earnings dates in the next 30 days "
+                       "for this universe.")
 
         if stock_results:
             ticker_tape(stock_results)
