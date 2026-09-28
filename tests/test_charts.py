@@ -92,3 +92,58 @@ def test_web_smd_calls_have_no_kwargs():
            if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "smd"
            and (len(n.args) != 1 or n.keywords)]
     assert not bad, f"smd() calls with wrong signature at lines {bad}"
+
+
+def _ts(y, m, d):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return int(datetime(y, m, d, 12, 0,
+                       tzinfo=ZoneInfo("America/New_York")).timestamp())
+
+
+def test_tick_label_formats_eastern():
+    from marketpulse.charts import _tick_label
+    assert _tick_label(_ts(2026, 7, 6)) == "Jul 6"
+    assert _tick_label(_ts(2026, 9, 28)) == "Sep 28"
+    assert _tick_label(None) is None
+
+
+def test_big_chart_draws_date_axis():
+    from marketpulse.charts import big_chart_svg
+    closes = [100.0 + i * 0.5 for i in range(90)]
+    dates = [_ts(2026, 7, 1) + i * 86400 for i in range(90)]
+    svg = big_chart_svg(closes, dates=dates)
+    # ~5 evenly spaced ticks, middle-anchored along the bottom
+    assert svg.count('text-anchor="middle"') == 5
+    assert "Jul 1" in svg
+    assert "Sep" in svg
+
+
+def test_big_chart_no_dates_no_ticks():
+    from marketpulse.charts import big_chart_svg
+    svg = big_chart_svg([100.0, 101.5, 99.2])
+    assert 'text-anchor="middle"' not in svg
+    svg2 = big_chart_svg([100.0, 101.5, 99.2],
+                         dates=[None, None, None])
+    assert 'text-anchor="middle"' not in svg2
+
+
+def test_big_chart_end_label_moved_off_high():
+    """Regression: 'end' and 'high' labels used to collide top-right."""
+    from marketpulse.charts import big_chart_svg
+    svg = big_chart_svg([100.0, 105.0, 104.9])  # end ~= high
+    # end label is bottom-left now (x=pad), high stays top-right
+    assert '<text x="10" y="' in svg  # pad == 10
+    end_idx = svg.index("end ")
+    high_idx = svg.index("high ")
+    assert svg[end_idx - 60:end_idx].count('text-anchor="end"') == 0
+
+
+def test_big_chart_dates_trim_with_closes():
+    from marketpulse.charts import big_chart_svg
+    closes = [float(i) for i in range(120)]
+    dates = [_ts(2026, 4, 1) + i * 86400 for i in range(120)]
+    svg = big_chart_svg(closes, dates=dates)
+    # trimmed to last 90 -> first tick is ~May, not April
+    assert "Apr" not in svg
+    assert svg.count('text-anchor="middle"') == 5

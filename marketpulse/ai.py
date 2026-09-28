@@ -6,6 +6,7 @@ If the API key is missing or the call fails, we return a plain message --
 the rest of the pipeline keeps working.
 """
 
+import asyncio
 import logging
 
 import aiohttp
@@ -69,6 +70,71 @@ async def _gemini_text(session, prompt):
     except Exception:
         logger.exception("AI analysis error")
         return "AI analysis unavailable."
+
+
+async def gemini_probe(session):
+    """Minimal live probe. Returns (ok, detail) -- never raises.
+
+    ok=True means the key, model, and network path all work. On failure
+    detail carries the real reason (HTTP status + API error message, or
+    timeout/network) so the UI can tell the user exactly what to fix
+    instead of a bare "error". The key itself is never in detail.
+    """
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/"
+        f"models/{config.GEMINI_MODEL}:generateContent"
+    )
+    try:
+        async with session.post(
+            url,
+            params={"key": config.GEMINI_API_KEY},
+            json={"contents": [{"parts": [{"text": "Reply with exactly: OK"}]}]},
+            timeout=aiohttp.ClientTimeout(total=20),
+        ) as response:
+            if response.status != 200:
+                detail = f"HTTP {response.status}"
+                try:
+                    data = await response.json()
+                    msg = (data.get("error") or {}).get("message", "")
+                    if msg:
+                        detail += f": {msg[:160]}"
+                except Exception:
+                    pass
+                return False, detail
+            try:
+                data = await response.json()
+            except Exception:
+                return False, "bad response body"
+            parts = ((data.get("candidates") or [{}])[0]
+                     .get("content", {}).get("parts", []))
+            text = "\n".join(p.get("text", "") for p in parts).strip()
+            if text:
+                return True, "live"
+            return False, "empty response"
+    except asyncio.TimeoutError:
+        return False, "timeout"
+    except aiohttp.ClientError:
+        return False, "network unreachable"
+    except Exception:
+        logger.exception("Gemini probe error")
+        return False, "request failed"
+
+
+def classify_gemini_status(ok, detail):
+    """Probe result -> short status for the sidebar.
+
+    live | key-rejected | model-not-found | network | error
+    """
+    if ok:
+        return "live"
+    d = (detail or "").lower()
+    if "api key not valid" in d or "api_key_invalid" in d:
+        return "key-rejected"
+    if "not found" in d or "is not supported" in d:
+        return "model-not-found"
+    if "timeout" in d or "network" in d or "connect" in d:
+        return "network"
+    return "error"
 
 
 async def generate_ai_analysis(session, symbol, quote, news):

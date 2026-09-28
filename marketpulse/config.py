@@ -11,9 +11,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Secrets: never hardcode these, never commit a .env file ---
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")      # only needed for bot mode
-FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")  # required: market data
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")    # optional: AI degrades gracefully
+DISCORD_TOKEN = (os.getenv("DISCORD_TOKEN") or "").strip() or None
+FINNHUB_API_KEY = (os.getenv("FINNHUB_API_KEY") or "").strip() or None
+GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or "").strip() or None
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
 # --- Scan universes ---

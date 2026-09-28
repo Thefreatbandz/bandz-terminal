@@ -1,5 +1,21 @@
 """Pure SVG chart helpers -- no network, no streamlit, fully testable."""
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
+
+
+def _tick_label(ts):
+    """Unix ts -> 'Jul 6' in Eastern time. None-safe."""
+    if ts is None:
+        return None
+    try:
+        d = datetime.fromtimestamp(ts, tz=_ET)
+    except (OSError, OverflowError, ValueError):
+        return None
+    return f"{d:%b} {d.day}"
+
 
 def sparkline_points(closes, w=120, h=60):
     """Map closes to SVG polyline points. Returns (points_str, first, last)."""
@@ -16,19 +32,27 @@ def sparkline_points(closes, w=120, h=60):
     return " ".join(pts), closes[0], closes[-1]
 
 
-def big_chart_svg(closes, w=680, h=220, price_fmt=None):
-    """Full-size line chart with min/max dashed guides, labels, and
-    start/end values. Returns an empty string for bad input.
+def big_chart_svg(closes, w=680, h=220, price_fmt=None, dates=None):
+    """Full-size line chart with min/max dashed guides, labels,
+    start/end values, and a date axis. Returns an empty string for
+    bad input.
 
     price_fmt: callable formatting a price for the corner labels
     (defaults to plain 1,234.50). Any $ it emits is escaped as \\$
     because this SVG is rendered through st.markdown, where $...$
     would be parsed as LaTeX math and mangle the markup.
+
+    dates: optional list of unix timestamps, one per close, drawn as
+    ~5 evenly spaced tick labels ("Jul 6") along the bottom.
     """
     closes = [c for c in closes if c]
     if len(closes) < 2:
         return ""
     closes = closes[-90:]
+    if dates is not None:
+        dates = list(dates)[-len(closes):]
+        if len(dates) != len(closes):
+            dates = None
     fmt = price_fmt or (lambda c: f"{c:,.2f}")
 
     def _label(value):
@@ -36,7 +60,7 @@ def big_chart_svg(closes, w=680, h=220, price_fmt=None):
 
     mn, mx = min(closes), max(closes)
     rng = (mx - mn) or 1.0
-    pad, top, bottom = 10, 26, 16
+    pad, top, bottom = 10, 26, 30
     pts = []
     for i, c in enumerate(closes):
         x = pad + i / (len(closes) - 1) * (w - 2 * pad)
@@ -46,6 +70,24 @@ def big_chart_svg(closes, w=680, h=220, price_fmt=None):
     line = " ".join(pts)
     y_min = top + (h - top - bottom)
     y_max = top
+
+    ticks = ""
+    if dates:
+        n = len(closes)
+        k = min(5, n)
+        idxs = sorted({round(i * (n - 1) / (k - 1)) for i in range(k)}
+                      ) if k > 1 else [0]
+        for i in idxs:
+            lab = _tick_label(dates[i])
+            if not lab:
+                continue
+            x = pad + i / (n - 1) * (w - 2 * pad)
+            ticks += (
+                f'<text x="{x:.1f}" y="{h - 8}" text-anchor="middle" '
+                f'fill="#8b93a7" font-size="10" font-family="monospace">'
+                f'{lab}</text>'
+            )
+
     return (
         f'<svg width="100%" viewBox="0 0 {w} {h}" '
         f'style="background:#05070d;border:1px solid #1b2130;'
@@ -62,9 +104,10 @@ def big_chart_svg(closes, w=680, h=220, price_fmt=None):
         f'low {_label(mn)}</text>'
         f'<text x="{pad}" y="16" fill="#8b93a7" font-size="11" '
         f'font-family="monospace">start {_label(closes[0])}</text>'
-        f'<text x="{w - pad}" y="16" text-anchor="end" fill="{color}" '
+        f'<text x="{pad}" y="{y_min + 14:.1f}" fill="{color}" '
         f'font-size="11" font-weight="bold" font-family="monospace">'
         f'end {_label(closes[-1])}</text>'
+        f'{ticks}'
         f'<polyline points="{line}" fill="none" stroke="{color}" '
         f'stroke-width="2"/>'
         f'</svg>'

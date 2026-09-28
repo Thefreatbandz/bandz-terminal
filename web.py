@@ -26,6 +26,7 @@ from marketpulse import sentiment as sentiment_mod
 from marketpulse import themes as theme_mod
 from marketpulse import watchlist as watchlist_store
 from marketpulse.ai import (DEGRADED_PREFIX, _gemini_text,
+                            classify_gemini_status, gemini_probe,
                             generate_ai_analysis, generate_market_brief,
                             generate_mover_explanation)
 from marketpulse.charts import big_chart_svg
@@ -370,19 +371,20 @@ def cached_universe_scan(symbols, include_ai=False, news_top_n=None,
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def cached_daily_closes(symbol):
-    """~90 days of daily closes for the full-size chart expander.
+def cached_daily_series(symbol):
+    """~90 days of (unix_ts, close) for the full-size chart expander.
 
     Yahoo-first (Finnhub /stock/candle isn't covered by this plan).
     """
     async def _go():
         async with aiohttp.ClientSession(trust_env=True) as session:
-            closes = await _yahoo_closes(session, symbol, rng="3mo",
+            series = await _yahoo_series(session, symbol, rng="3mo",
                                          interval="1d")
-            if len(closes) < 2:
+            if len(series) < 2:
                 client = FinnhubClient(session)
                 closes = await client.candles(symbol)
-            return closes
+                series = [(None, c) for c in closes]
+            return series
     return _run(_go())
 
 
@@ -396,10 +398,11 @@ def cached_stock_scan(symbol):
     return _run(_go())
 
 
-async def _yahoo_closes(session, symbol, rng="1d", interval="5m"):
-    """Closes via Yahoo's free chart API (no key).
+async def _yahoo_series(session, symbol, rng="1d", interval="5m"):
+    """(unix_ts, close) pairs via Yahoo's free chart API (no key).
 
-    Fallback for when the Finnhub plan doesn't cover /stock/candle.
+    Timestamps come from the chart payload so the 3-month chart can draw
+    a real date axis. Pairs with missing closes are dropped.
     """
     if ":" in symbol:  # "BINANCE:BTCUSDT" -> "BTC-USD"
         ysym = symbol.split(":")[-1].replace("USDT", "-USD")
@@ -422,9 +425,23 @@ async def _yahoo_closes(session, symbol, rng="1d", interval="5m"):
             return []
         quote = (result.get("indicators", {}).get("quote") or [{}])[0]
         closes = quote.get("close") or []
-        return [float(c) for c in closes if isinstance(c, (int, float))]
+        stamps = result.get("timestamp") or []
+        pairs = []
+        for i, c in enumerate(closes):
+            if isinstance(c, (int, float)):
+                ts = stamps[i] if i < len(stamps) else None
+                pairs.append((ts, float(c)))
+        return pairs
     except Exception:
         return []
+
+
+async def _yahoo_closes(session, symbol, rng="1d", interval="5m"):
+    """Closes via Yahoo's free chart API (no key).
+
+    Fallback for when the Finnhub plan doesn't cover /stock/candle.
+    """
+    return [c for _, c in await _yahoo_series(session, symbol, rng, interval)]
 
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -467,24 +484,23 @@ def cached_insider(symbol):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def gemini_source():
-    """'live' / 'error' / None based on a real minimal Gemini call.
+    """(status, detail) based on a real minimal Gemini call.
 
+    status: live | key-rejected | model-not-found | network | error | None.
     Key presence alone can't be trusted (a bad pasted key looks
     'connected'), so the sidebar reports what this probe finds.
     """
     if not config.GEMINI_API_KEY:
-        return None
+        return None, "no key configured"
 
     async def _go():
         async with aiohttp.ClientSession(trust_env=True) as session:
-            text = await _gemini_text(session, "Reply with exactly: OK")
-            if isinstance(text, str) and text.strip().upper().startswith("OK"):
-                return "live"
-            return "error"
+            return await gemini_probe(session)
     try:
-        return _run(_go())
+        ok, detail = _run(_go())
+        return classify_gemini_status(ok, detail), detail
     except Exception:
-        return "error"
+        return "error", "probe crashed"
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -710,9 +726,12 @@ def watch_card(result, key_prefix=""):
                 st.session_state[f"analysis-{symbol}"] = explain(
                     symbol, quote, news)
     with st.expander("Full chart \u00b7 3 months"):
-        closes = cached_daily_closes(symbol)
+        series = cached_daily_series(symbol)
+        closes = [c for _, c in series]
+        dates = [ts for ts, _ in series]
         if len(closes) >= 2:
-            st.markdown(big_chart_svg(closes, price_fmt=disp_price),
+            st.markdown(big_chart_svg(closes, price_fmt=disp_price,
+                                      dates=dates),
                         unsafe_allow_html=True)
         else:
             st.caption("Chart data unavailable right now.")
@@ -836,9 +855,13 @@ with st.sidebar:
                 "yahoo": "degraded (Yahoo fallback)"}.get(fh_src,
                                                          "error — check key")
     st.write("Finnhub:", fh_label if config.FINNHUB_API_KEY else "missing")
-    g_src = gemini_source()
-    g_label = {"live": "live", "error": "error — check key"}.get(
-        g_src, "missing (AI off)")
+    g_status, g_detail = gemini_source()
+    g_label = {"live": "live",
+               "key-rejected": "key rejected — re-paste it in Secrets",
+               "model-not-found": "model not found — check GEMINI_MODEL",
+               "network": "network issue — retrying",
+               "error": "error — check key"}.get(
+        g_status, "missing (AI off)")
     st.write("Gemini:", g_label)
     st.divider()
     if st.button("Clear cache"):
@@ -997,7 +1020,7 @@ with tab_stocks:
                   if abs(r["quote"]["change_percent"]) >= 2.0][:6]
         if movers:
             section("02", "Why is it moving?",
-                    "Biggest |day moves| in this scan — tap for a 1-2 "
+                    "Biggest day moves in this scan — tap for a 1-2 "
                     "sentence AI read on the headlines.")
             for r in movers:
                 sym = r["symbol"]

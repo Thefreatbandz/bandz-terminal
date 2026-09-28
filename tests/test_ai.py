@@ -79,3 +79,75 @@ def test_market_brief_degrades_to_mover_list():
     text = _run(generate_market_brief(FailSession(), items))
     assert text.startswith(DEGRADED_PREFIX)
     assert "ACME" in text
+
+
+# --- gemini_probe / classify_gemini_status ---
+
+from marketpulse.ai import classify_gemini_status, gemini_probe
+
+
+class _Resp:
+    def __init__(self, status, payload=None):
+        self.status = status
+        self._payload = payload or {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def json(self):
+        return self._payload
+
+    async def text(self):
+        return ""
+
+
+class _Session:
+    def __init__(self, resp):
+        self._resp = resp
+
+    def post(self, *args, **kwargs):
+        return self._resp
+
+
+class _TimeoutSession:
+    def post(self, *args, **kwargs):
+        raise asyncio.TimeoutError()
+
+
+_OK = {"candidates": [{"content": {"parts": [{"text": "OK"}]}}]}
+_BADKEY = {"error": {"message": "API key not valid. Please pass a valid API key."}}
+
+
+def test_probe_live():
+    ok, detail = _run(gemini_probe(_Session(_Resp(200, _OK))))
+    assert ok and detail == "live"
+    assert classify_gemini_status(ok, detail) == "live"
+
+
+def test_probe_bad_key_classifies_key_rejected():
+    ok, detail = _run(gemini_probe(_Session(_Resp(400, _BADKEY))))
+    assert not ok
+    assert "400" in detail and "API key not valid" in detail
+    # the key itself must never leak into detail
+    assert "AIza" not in detail
+    assert classify_gemini_status(ok, detail) == "key-rejected"
+
+
+def test_probe_timeout_classifies_network():
+    ok, detail = _run(gemini_probe(_TimeoutSession()))
+    assert not ok and detail == "timeout"
+    assert classify_gemini_status(ok, detail) == "network"
+
+
+def test_probe_empty_body():
+    ok, detail = _run(gemini_probe(_Session(_Resp(200, {"candidates": []}))))
+    assert not ok
+
+
+def test_classify_gemini_status_cases():
+    assert classify_gemini_status(False, "HTTP 404: models/x is not found") == "model-not-found"
+    assert classify_gemini_status(False, "network unreachable") == "network"
+    assert classify_gemini_status(False, "HTTP 500: backend error") == "error"
