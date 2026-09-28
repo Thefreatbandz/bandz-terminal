@@ -85,7 +85,7 @@ def spark_svg(closes, w=320, h=56):
         x = i / (len(closes) - 1) * w
         y = h - 4 - (c - mn) / rng * (h - 8)
         pts.append(f"{x:.1f},{y:.1f}")
-    color = "#39ff88" if closes[-1] >= closes[0] else "#ff3b5c"
+    color = "#34d399" if closes[-1] >= closes[0] else "#f87171"
     return (
         f'<svg class="bz-spark" viewBox="0 0 {w} {h}" '
         f'preserveAspectRatio="none"><polyline points="{" ".join(pts)}" '
@@ -120,13 +120,13 @@ def session_label():
     et = datetime.now(ZoneInfo("America/New_York"))
     mins = et.hour * 60 + et.minute
     if et.weekday() >= 5:
-        return "Weekend — showing last close 🌙"
+        return "Weekend — showing last close"
     if mins < 240:
-        return "Overnight — showing last close 🌙"
+        return "Overnight — showing last close"
     if mins < 570:
-        return "Pre-market movers 🌅"
+        return "Pre-market movers"
     if mins >= 960:
-        return "After-hours movers 🌙"
+        return "After-hours movers"
     return None
 
 
@@ -143,8 +143,8 @@ def section(num, title, sub=""):
 
 def command_strip():
     is_open = market_is_open()
-    badge = ("open\">🟢 MARKET OPEN" if is_open
-             else "shut\">🔴 MARKET CLOSED")
+    badge = ("open\"><span class=\"dot\"></span>MARKET OPEN" if is_open
+             else "shut\"><span class=\"dot\"></span>MARKET CLOSED")
     st.markdown(
         f'<div class="bz-strip"><div class="bz-title">⚡ BANDZ TERMINAL</div>'
         f'<div style="margin-left:auto">'
@@ -212,7 +212,7 @@ def fx_strip():
         price = p["price"]
         px = f"{price:,.4f}" if price < 10 else f"{price:,.2f}"
         cards.append(
-            f'<div class="bz-idxc"><div class="s">💱 {p["label"]}</div>'
+            f'<div class="bz-idxc"><div class="s">{p["label"]}</div>'
             f'<div class="p">{px}</div>'
             f'<div class="c {cls}">{fmt_change(chg)}</div></div>'
         )
@@ -554,14 +554,14 @@ def watch_card(result, key_prefix=""):
     meta_lines = []
     edate = cached_earnings().get(symbol)
     if edate:
-        meta_lines.append(f"📅 Earnings {fmt_earnings(edate)}")
+        meta_lines.append(f"Earnings {fmt_earnings(edate)}")
     ins = cached_insider(symbol)
     if ins:
         t = ins[0]
         px = (f" @ ${t['price']:.2f}"
               if isinstance(t["price"], (int, float)) else "")
         meta_lines.append(
-            f"🧑‍💼 {html.escape(t['name'].split(',')[0])} "
+            f"{html.escape(t['name'].split(',')[0])} "
             f"{html.escape(t['side'])} {t['shares']:,} sh{px} "
             f"({html.escape(t['date'])})")
     meta_html = (f'<div class="bz-meta">{" · ".join(meta_lines)}</div>'
@@ -634,11 +634,11 @@ def watch_card(result, key_prefix=""):
                         st.caption(meta)
     with c2:
         btn_key = f"{key_prefix}explain-{symbol}"
-        if st.button("🤖 Explain", key=btn_key):
+        if st.button("Explain", key=btn_key):
             with st.spinner("Asking Gemini..."):
                 st.session_state[f"analysis-{symbol}"] = explain(
                     symbol, quote, news)
-    with st.expander("📈 Full chart (3 months)"):
+    with st.expander("Full chart \u00b7 3 months"):
         closes = cached_daily_closes(symbol)
         if len(closes) >= 2:
             st.markdown(big_chart_svg(closes), unsafe_allow_html=True)
@@ -653,7 +653,7 @@ def watch_card(result, key_prefix=""):
 
 with st.sidebar:
     st.header("Controls")
-    universe = st.radio("Universe", ["Core 25", "Everything 🌐", "Custom"])
+    universe = st.radio("Universe", ["Core 25", "Everything", "Custom"])
 
     theme_label = st.radio(
         "Theme", ["Cyber", "Gold", "Retro CRT", "Space"],
@@ -673,7 +673,7 @@ with st.sidebar:
     if auto:
         minutes = st.slider("Refresh every (minutes)", 2, 60, 5)
     st.divider()
-    st.subheader("⭐ My watchlist")
+    st.subheader("My watchlist")
     st.caption("Your tickers — validated against live market data.")
     w_sym = st.text_input("Add ticker", key="wl-sym", placeholder="NVDA")
     if st.button("Add ticker", key="wl-add"):
@@ -694,11 +694,11 @@ with st.sidebar:
                      key=f"wl-star-{w['symbol']}"):
             watchlist_store.toggle_star(w["symbol"])
             st.rerun()
-        if c3.button("❌", key=f"wl-del-{w['symbol']}"):
+        if c3.button("\u2715", key=f"wl-del-{w['symbol']}"):
             watchlist_store.remove_symbol(w["symbol"])
             st.rerun()
     st.divider()
-    st.subheader("🔔 Alerts")
+    st.subheader("Alerts")
     st.caption("Checked every 30 min during market hours. "
                "A push lands on your phone when one fires.")
     alert_kind = st.radio("Alert type",
@@ -741,20 +741,20 @@ with st.sidebar:
             label = (f"{a.get('symbol')} |day change| ≥ "
                      f"{a.get('threshold'):g}%")
         elif atype == "keyword":
-            label = f"📰 keyword '{a.get('keyword')}'"
+            label = f"keyword '{a.get('keyword')}'"
         else:
             base = (f"${a['baseline']:.2f}" if a.get("baseline")
                     else "arming…")
             label = f"{a.get('symbol')} ±{a.get('pct'):g}% • from {base}"
         c1, c2 = st.columns([4, 1])
         c1.caption(label)
-        if c2.button("❌", key=f"del-{a['id']}"):
+        if c2.button("\u2715", key=f"del-{a['id']}"):
             alert_store.remove_alert(a["id"])
             st.rerun()
     st.divider()
     st.subheader("Connections")
-    st.write("Finnhub:", "✅" if config.FINNHUB_API_KEY else "❌ missing")
-    st.write("Gemini:", "✅" if config.GEMINI_API_KEY else "❌ missing (AI off)")
+    st.write("Finnhub:", "connected" if config.FINNHUB_API_KEY else "missing")
+    st.write("Gemini:", "connected" if config.GEMINI_API_KEY else "missing (AI off)")
     st.divider()
     if st.button("Clear cache"):
         cache.clear()
@@ -780,14 +780,14 @@ index_strip()
 fx_strip()
 
 tab_stocks, tab_news, tab_penny, tab_crypto = st.tabs(
-    ["🔥 Stocks", "📰 News", "🟣 Penny", "🪙 Crypto"])
+    ["Stocks", "News", "Penny", "Crypto"])
 
 # --- shared stock scan (MarketPulse + News tabs) ---
 news_top_n = None
 scan_delay = None
 if universe == "Custom":
     symbols = tuple(s.strip().upper() for s in custom.split(",") if s.strip())
-elif universe == "Everything 🌐":
+elif universe == "Everything":
     symbols = tuple(config.EVERYTHING_STOCKS)
     # Big list: quotes for all, news only for the 20 biggest movers.
     # 0.7s pacing keeps us under 60 calls/min on 150+ symbols.
@@ -803,14 +803,14 @@ if symbols:
                                          scan_delay=scan_delay)
 
 sector_filter = "All"
-if universe == "Everything 🌐":
+if universe == "Everything":
     sector_filter = st.selectbox("Sector", ["All"] + list(config.SECTORS))
 shown = [r for r in stock_results
          if sector_filter == "All" or r.get("sector") == sector_filter]
 
 # --- MarketPulse ---
 with tab_stocks:
-    if st.button("🔄 Run scan", type="primary"):
+    if st.button("Run scan", type="primary"):
         cached_universe_scan.clear()
 
     if not symbols:
@@ -825,7 +825,7 @@ with tab_stocks:
 
         my_wl = watchlist_store.load_watchlist()
         if my_wl:
-            section("★", "My watchlist",
+            section("", "My watchlist",
                     "Your tickers — ★ starred pin to the top.")
             for w in my_wl:
                 res = cached_stock_scan(w["symbol"])
@@ -836,7 +836,7 @@ with tab_stocks:
                     st.caption(f"{w['symbol']}: no data right now.")
 
         # Earnings calendar: next 30 days, scanned universe only.
-        section("📅", "Earnings calendar",
+        section("", "Earnings calendar",
                 "Upcoming reports in this universe — next 30 days.")
         with st.spinner("Loading earnings dates..."):
             earnings = cached_earnings()
@@ -892,7 +892,7 @@ with tab_stocks:
             for r in movers:
                 sym = r["symbol"]
                 chg = r["quote"]["change_percent"]
-                with st.expander(f"❓ {sym} ({chg:+.2f}%) — why?"):
+                with st.expander(f"{sym} ({chg:+.2f}%) — why?"):
                     key = f"why-{sym}"
                     if st.button("Ask Gemini", key=f"{key}-btn"):
                         with st.spinner("Reading the headlines..."):
@@ -918,12 +918,12 @@ with tab_stocks:
 
         # 04 — news wire
         section("04", "News wire", "Freshest headlines across the scan. "
-                "The 📰 News tab has every story, per symbol.")
+                "The News tab has every story, per symbol.")
         news_wire(shown)
 
         # AI brief
         if shown:
-            if st.button("✨ AI Market Brief"):
+            if st.button("AI Market Brief"):
                 items = tuple(
                     (r["symbol"], r["quote"]["price"],
                      r["quote"]["change_percent"],
@@ -933,7 +933,7 @@ with tab_stocks:
                 st.session_state["brief"] = cached_brief(items)
             brief = st.session_state.get("brief")
             if brief:
-                with st.expander("✨ Market Brief", expanded=True):
+                with st.expander("Market Brief", expanded=True):
                     st.markdown(brief)
 
         # 05 — sectors
@@ -945,7 +945,7 @@ with tab_stocks:
         section("06", "Heatmap", "Every symbol, colored by today's move.")
         heatmap(shown)
 
-        if universe == "Everything 🌐":
+        if universe == "Everything":
             section("07", "All results", "The full scan table.")
             st.dataframe(
                 [{
@@ -962,7 +962,7 @@ with tab_stocks:
 with tab_news:
     with_news = [r for r in shown if r.get("news")]
     total_heads = sum(len(r["news"]) for r in with_news)
-    section("📰", "News room",
+    section("", "News room",
             f"{total_heads} headlines across {len(with_news)} symbols "
             f"from the last 7 days. Newest first.")
     if not with_news:
@@ -1044,7 +1044,7 @@ with tab_penny:
             "Symbol": sym,
             "Price": fmt_price(q["price"]),
             "Change": fmt_change(q["change_percent"]),
-            "Passes": "✅" if ok else "❌",
+            "Passes": "Yes" if ok else "No",
         })
     st.dataframe(rows, width="stretch")
 
@@ -1052,7 +1052,7 @@ with tab_penny:
 with tab_crypto:
     section("01", "Crypto watch", "Spot prices via Finnhub. "
             "Change is vs. prior close.")
-    if st.button("🔄 Refresh crypto"):
+    if st.button("Refresh crypto"):
         cached_universe_scan.clear()
     crypto_results = cached_universe_scan(tuple(CRYPTO_MAP.values()))
     for res in crypto_results:
