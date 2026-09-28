@@ -30,7 +30,9 @@ from marketpulse.ai import (generate_ai_analysis, generate_market_brief,
 from marketpulse.charts import big_chart_svg
 from marketpulse.data import FinnhubClient
 from marketpulse.engine import scan_stock, scan_universe, sector_summary
-from marketpulse.format import fmt_change, fmt_price, move_emoji, score_band
+from marketpulse.format import (CCY_SYMBOLS, fmt_change, fmt_price,
+                                fmt_price_ccy, fx_rates_from_strip,
+                                move_emoji, score_band)
 from marketpulse.scoring import penny_qualifies
 
 st.set_page_config(page_title="Bandz Terminal", page_icon="⚡", layout="wide")
@@ -115,6 +117,19 @@ def market_is_open():
     return et.weekday() < 5 and 570 <= mins < 960
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def ccy_rates():
+    """Units-per-USD for each display currency (memoized 10 min)."""
+    return fx_rates_from_strip(cached_fx())
+
+
+def disp_price(price_usd):
+    """Format a USD price in the sidebar-selected display currency."""
+    return fmt_price_ccy(price_usd,
+                         st.session_state.get("bz-ccy", "USD"),
+                         ccy_rates())
+
+
 def session_label():
     """Pre-market / after-hours framing for the stock tab."""
     et = datetime.now(ZoneInfo("America/New_York"))
@@ -166,7 +181,7 @@ def index_strip():
         cls = "up" if chg > 0 else "down" if chg < 0 else "flat"
         cards.append(
             f'<div class="bz-idxc"><div class="s">{res["symbol"]}</div>'
-            f'<div class="p">{fmt_price(q["price"])}</div>'
+            f'<div class="p">{disp_price(q["price"])}</div>'
             f'<div class="c {cls}">{fmt_change(chg)}</div></div>'
         )
     st.markdown(f'<div class="bz-idx">{"".join(cards)}</div>',
@@ -182,7 +197,8 @@ def cached_fx():
     give the day-over-day change.
     """
     pairs = [("EUR/USD", "EURUSD=X"), ("GBP/USD", "GBPUSD=X"),
-             ("USD/JPY", "USDJPY=X")]
+             ("USD/JPY", "USDJPY=X"), ("USD/CAD", "USDCAD=X"),
+             ("AUD/USD", "AUDUSD=X")]
 
     async def _go():
         async with aiohttp.ClientSession(trust_env=True) as session:
@@ -563,7 +579,7 @@ def watch_card(result, key_prefix=""):
     if hi52 and lo52 and hi52 > lo52:
         pos = max(0.0, min(1.0, (price - lo52) / (hi52 - lo52)))
         range_html = (
-            f'<span class="bz-label">52W ${lo52:.2f} – ${hi52:.2f} · '
+            f'<span class="bz-label">52W {disp_price(lo52)} – {disp_price(hi52)} · '
             f"AT {pos:.0%}</span>"
             f'<div class="bz-bar"><div style="width:{pos * 100:.0f}%;'
             f'background:#00e5ff;"></div></div>'
@@ -623,7 +639,7 @@ def watch_card(result, key_prefix=""):
         f'<span class="bz-chip">{html.escape(result.get("sector", "Other"))}'
         f"</span>{reco_html}</div>"
         f'<div class="bz-chg {chg_cls}">{fmt_change(change)}</div></div>'
-        f'<div class="bz-price">{fmt_price(price)}</div>'
+        f'<div class="bz-price">{disp_price(price)}</div>'
         f"{spark}"
         f'<span class="bz-label">SCORE {score}/100 · '
         f"{html.escape(score_band(score)).upper()}</span>"
@@ -682,6 +698,12 @@ with st.sidebar:
     if theme_key != THEME:
         theme_mod.save_theme(theme_key)
         st.rerun()
+    st.selectbox(
+        "Display currency", list(CCY_SYMBOLS),
+        key="bz-ccy",
+        help="Converts all prices from USD using live FX rates. "
+             "USD is the default.",
+    )
     custom = ""
     if universe == "Custom":
         custom = st.text_input("Symbols (comma separated)", "NVDA, TSLA")
@@ -999,7 +1021,7 @@ with tab_stocks:
                 [{
                     "Symbol": r["symbol"],
                     "Sector": r.get("sector", "Other"),
-                    "Price": fmt_price(r["quote"]["price"]),
+                    "Price": disp_price(r["quote"]["price"]),
                     "Change": fmt_change(r["quote"]["change_percent"]),
                     "Score": r["score"],
                 } for r in shown],
@@ -1090,7 +1112,7 @@ with tab_penny:
         ok = penny_qualifies(q["price"], q["change_percent"])
         rows.append({
             "Symbol": sym,
-            "Price": fmt_price(q["price"]),
+            "Price": disp_price(q["price"]),
             "Change": fmt_change(q["change_percent"]),
             "Passes": "Yes" if ok else "No",
         })
