@@ -436,6 +436,24 @@ def cached_insider(symbol):
     return _run(_go())
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def finnhub_source():
+    """Where live quotes are actually coming from right now.
+
+    "finnhub" = Finnhub API healthy, "yahoo" = Finnhub failing and the
+    Yahoo fallback is carrying quotes, None = neither is reachable.
+    """
+    async def _go():
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            client = FinnhubClient(session)
+            q = await client.quote("AAPL")
+            return (q or {}).get("source")
+    try:
+        return _run(_go())
+    except Exception:
+        return None
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def cached_earnings():
     """symbol -> next earnings date. One API call for the whole board."""
@@ -753,7 +771,11 @@ with st.sidebar:
             st.rerun()
     st.divider()
     st.subheader("Connections")
-    st.write("Finnhub:", "connected" if config.FINNHUB_API_KEY else "missing")
+    fh_src = finnhub_source()
+    fh_label = {"finnhub": "live",
+                "yahoo": "degraded (Yahoo fallback)"}.get(fh_src,
+                                                         "error — check key")
+    st.write("Finnhub:", fh_label if config.FINNHUB_API_KEY else "missing")
     st.write("Gemini:", "connected" if config.GEMINI_API_KEY else "missing (AI off)")
     st.divider()
     if st.button("Clear cache"):
@@ -778,6 +800,26 @@ if missing:
 
 index_strip()
 fx_strip()
+
+# --- ticker search: look up any symbol on demand ---
+search_sym = st.text_input("Search any ticker", key="bz-search",
+                           placeholder="Type a symbol — e.g. NVDA")
+if search_sym and search_sym.strip():
+    sym = search_sym.strip().upper()
+    sym = CRYPTO_MAP.get(sym, sym)  # BTC -> BINANCE:BTCUSDT
+    with st.spinner(f"Looking up {sym}..."):
+        hit = cached_stock_scan(sym)
+    if hit:
+        watch_card(hit, key_prefix="search-")
+        if st.button(f"Add {sym} to watchlist", key="search-add"):
+            if watchlist_store.add_symbol(sym):
+                st.success(f"Added {sym}")
+                st.rerun()
+            else:
+                st.caption(f"{sym} is already on your watchlist.")
+    else:
+        st.warning(f"No market data for '{sym}' — check the symbol.")
+    st.divider()
 
 tab_stocks, tab_news, tab_penny, tab_crypto = st.tabs(
     ["Stocks", "News", "Penny", "Crypto"])
@@ -818,10 +860,16 @@ with tab_stocks:
     else:
         label = session_label()
         if label:
-            st.caption(f"{label} Quotes reflect extended-hours trading.")
+            extra = (" Quotes reflect extended-hours trading."
+                     if "movers" in label else "")
+            st.caption(f"{label}.{extra}")
         st.caption(
             f"Last scan {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')} • "
             f"{len(stock_results)} results • showing top {config.TOP_N}")
+        if not stock_results:
+            st.warning("The scan came back empty — live quotes aren't "
+                       "loading right now. Check Connections in the sidebar; "
+                       "the board fills in once market data is flowing.")
 
         my_wl = watchlist_store.load_watchlist()
         if my_wl:

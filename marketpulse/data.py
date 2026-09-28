@@ -63,12 +63,69 @@ class FinnhubClient:
     """Finnhub market data. Caches quotes and news to respect rate limits."""
 
     BASE_URL = "https://finnhub.io/api/v1"
+    YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart"
 
     def __init__(self, session, api_key=None):
         self.session = session
         # api_key is a parameter (not a module global) so tests can inject
         # a fake key and the web app can pass its own config.
         self.api_key = api_key or config.FINNHUB_API_KEY
+
+    @staticmethod
+    def _yahoo_symbol(symbol):
+        """Map our symbol format to Yahoo's: BINANCE:BTCUSDT -> BTC-USD."""
+        if ":" in symbol:
+            symbol = symbol.split(":")[-1].replace("USDT", "-USD")
+        return symbol.replace(".", "-")
+
+    async def _yahoo_quote(self, symbol):
+        """Quote via Yahoo's free chart API (no key).
+
+        Fallback for when Finnhub is unreachable, rate-limited, or the
+        plan doesn't cover the symbol -- the FX strip and sparklines
+        already rely on this same endpoint, so it's proven reachable.
+        Returns the same dict shape as quote(), tagged source="yahoo".
+        """
+        url = f"{self.YAHOO_CHART}/{self._yahoo_symbol(symbol)}"
+        try:
+            async with self.session.get(
+                url,
+                params={"interval": "1d", "range": "5d"},
+                headers={"User-Agent": "Mozilla/5.0",
+                         "Accept-Encoding": "gzip, deflate"},
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as response:
+                if response.status != 200:
+                    return None
+                data = await response.json()
+        except Exception:
+            return None
+        result = (data.get("chart", {}).get("result") or [None])[0]
+        meta = (result or {}).get("meta") or {}
+        price = meta.get("regularMarketPrice")
+        previous_close = (meta.get("chartPreviousClose")
+                          or meta.get("previousClose"))
+        if not isinstance(price, (int, float)) or price <= 0:
+            return None
+        if not isinstance(previous_close, (int, float)) \
+                or previous_close <= 0:
+            previous_close = 0
+        change_percent = (
+            ((price - previous_close) / previous_close) * 100
+            if previous_close > 0
+            else 0
+        )
+        return {
+            "symbol": symbol,
+            "price": float(price),
+            "previous_close": float(previous_close),
+            "change_percent": change_percent,
+            "high": meta.get("regularMarketDayHigh"),
+            "low": meta.get("regularMarketDayLow"),
+            "open": meta.get("regularMarketOpen"),
+            "timestamp": meta.get("regularMarketTime"),
+            "source": "yahoo",
+        }
 
     async def quote(self, symbol):
         cache_key = f"quote:{symbol}"
@@ -82,33 +139,38 @@ class FinnhubClient:
             params={"symbol": symbol, "token": self.api_key},
         )
 
-        if not isinstance(data, dict):
+        result = None
+        if isinstance(data, dict):
+            price = data.get("c")
+            previous_close = data.get("pc")
+            if isinstance(price, (int, float)) and price > 0:
+                if not isinstance(previous_close, (int, float)):
+                    previous_close = 0
+                change_percent = (
+                    ((price - previous_close) / previous_close) * 100
+                    if previous_close > 0
+                    else 0
+                )
+                result = {
+                    "symbol": symbol,
+                    "price": price,
+                    "previous_close": previous_close,
+                    "change_percent": change_percent,
+                    "high": data.get("h"),
+                    "low": data.get("l"),
+                    "open": data.get("o"),
+                    "timestamp": data.get("t"),
+                    "source": "finnhub",
+                }
+
+        if result is None:
+            # Finnhub missed (blocked IP, bad key, rate limit, unknown
+            # symbol). Try Yahoo before giving up so one provider's
+            # outage can't blank the whole board.
+            result = await self._yahoo_quote(symbol)
+
+        if result is None:
             return None
-
-        price = data.get("c")
-        previous_close = data.get("pc")
-
-        if not isinstance(price, (int, float)) or price <= 0:
-            return None
-        if not isinstance(previous_close, (int, float)):
-            previous_close = 0
-
-        change_percent = (
-            ((price - previous_close) / previous_close) * 100
-            if previous_close > 0
-            else 0
-        )
-
-        result = {
-            "symbol": symbol,
-            "price": price,
-            "previous_close": previous_close,
-            "change_percent": change_percent,
-            "high": data.get("h"),
-            "low": data.get("l"),
-            "open": data.get("o"),
-            "timestamp": data.get("t"),
-        }
 
         cache.set_cached(cache_key, result, config.QUOTE_CACHE_SECONDS)
         return result

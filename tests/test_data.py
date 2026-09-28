@@ -2,6 +2,8 @@
 
 import asyncio
 
+import pytest
+
 from marketpulse import cache
 from marketpulse.data import FinnhubClient, fetch_json
 
@@ -97,3 +99,83 @@ def test_earnings_calendar_maps_symbol_to_date():
     ]}
     client = FinnhubClient(StubSession(payload), api_key="fake")
     assert _run(client.earnings_calendar()) == {"AAPL": "2026-10-28"}
+
+
+class UrlStubSession:
+    """Stub that serves different payloads per URL substring."""
+
+    def __init__(self, routes):
+        # routes: list of (url_substring, payload, status)
+        self._routes = routes
+
+    def get(self, url, **kwargs):
+        for sub, payload, status in self._routes:
+            if sub in url:
+                return StubResponse(payload, status)
+        return StubResponse({}, 404)
+
+
+YAHOO_CHART_PAYLOAD = {
+    "chart": {"result": [{
+        "meta": {
+            "regularMarketPrice": 150.0,
+            "chartPreviousClose": 145.0,
+            "regularMarketDayHigh": 152.0,
+            "regularMarketDayLow": 144.0,
+            "regularMarketOpen": 146.0,
+            "regularMarketTime": 1720000000,
+        },
+    }]},
+}
+
+
+def test_quote_uses_finnhub_when_healthy():
+    session = UrlStubSession([
+        ("finnhub.io", {"c": 100.0, "pc": 95.0, "h": 101.0, "l": 94.0,
+                        "o": 96.0, "t": 1720000000}, 200),
+    ])
+    client = FinnhubClient(session, api_key="fake")
+    q = _run(client.quote("AAA"))
+    assert q["price"] == 100.0
+    assert q["change_percent"] == pytest.approx(100.0 * 5.0 / 95.0)
+    assert q["source"] == "finnhub"
+
+
+def test_quote_falls_back_to_yahoo_when_finnhub_fails():
+    session = UrlStubSession([
+        ("finnhub.io", {}, 403),
+        ("yahoo", YAHOO_CHART_PAYLOAD, 200),
+    ])
+    client = FinnhubClient(session, api_key="fake")
+    q = _run(client.quote("AAA"))
+    assert q is not None
+    assert q["price"] == 150.0
+    assert q["previous_close"] == 145.0
+    assert q["change_percent"] == pytest.approx(100.0 * 5.0 / 145.0)
+    assert q["high"] == 152.0
+    assert q["source"] == "yahoo"
+
+
+def test_quote_falls_back_to_yahoo_on_bad_finnhub_data():
+    session = UrlStubSession([
+        ("finnhub.io", {"c": 0, "pc": 0}, 200),  # invalid quote
+        ("yahoo", YAHOO_CHART_PAYLOAD, 200),
+    ])
+    client = FinnhubClient(session, api_key="fake")
+    q = _run(client.quote("AAA"))
+    assert q is not None and q["source"] == "yahoo"
+
+
+def test_quote_none_when_both_providers_fail():
+    session = UrlStubSession([
+        ("finnhub.io", {}, 500),
+        ("yahoo", {}, 404),
+    ])
+    client = FinnhubClient(session, api_key="fake")
+    assert _run(client.quote("AAA")) is None
+
+
+def test_yahoo_symbol_mapping():
+    assert FinnhubClient._yahoo_symbol("BINANCE:BTCUSDT") == "BTC-USD"
+    assert FinnhubClient._yahoo_symbol("BRK.B") == "BRK-B"
+    assert FinnhubClient._yahoo_symbol("AAPL") == "AAPL"
