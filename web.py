@@ -23,6 +23,7 @@ from streamlit_autorefresh import st_autorefresh
 from marketpulse import alerts as alert_store
 from marketpulse import cache, calibration, config
 from marketpulse import sentiment as sentiment_mod
+from marketpulse import watchlist as watchlist_store
 from marketpulse.ai import (generate_ai_analysis, generate_market_brief,
                             generate_mover_explanation)
 from marketpulse.data import FinnhubClient
@@ -579,6 +580,19 @@ def cached_recommendation(symbol):
     return _run(_go())
 
 
+def validate_symbol(symbol):
+    """Finnhub quote lookup; None when the symbol has no market data."""
+    symbol = (symbol or "").strip().upper()
+    if not symbol:
+        return None
+
+    async def _go():
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            client = FinnhubClient(session)
+            return await client.quote(symbol)
+    return _run(_go())
+
+
 def _mover_cache_file():
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "data", "why_moving.json")
@@ -748,23 +762,81 @@ with st.sidebar:
     if auto:
         minutes = st.slider("Refresh every (minutes)", 2, 60, 5)
     st.divider()
-    st.subheader("🔔 Price alerts")
+    st.subheader("⭐ My watchlist")
+    st.caption("Your tickers — validated against live market data.")
+    w_sym = st.text_input("Add ticker", key="wl-sym", placeholder="NVDA")
+    if st.button("Add ticker", key="wl-add"):
+        quote = validate_symbol(w_sym)
+        if not quote:
+            st.warning(f"No market data for "
+                       f"'{(w_sym or '').strip().upper()}' — check the symbol.")
+        elif watchlist_store.add_symbol(w_sym):
+            st.success(f"Added {(w_sym or '').strip().upper()}")
+            st.rerun()
+        else:
+            st.warning("Already on your watchlist.")
+    for w in watchlist_store.load_watchlist():
+        star = "★" if w.get("starred") else "☆"
+        c1, c2, c3 = st.columns([3, 1, 1])
+        c1.caption(f"{star} {w['symbol']}")
+        if c2.button("★" if not w.get("starred") else "☆",
+                     key=f"wl-star-{w['symbol']}"):
+            watchlist_store.toggle_star(w["symbol"])
+            st.rerun()
+        if c3.button("❌", key=f"wl-del-{w['symbol']}"):
+            watchlist_store.remove_symbol(w["symbol"])
+            st.rerun()
+    st.divider()
+    st.subheader("🔔 Alerts")
     st.caption("Checked every 30 min during market hours. "
                "A push lands on your phone when one fires.")
-    a_sym = st.text_input("Symbol", key="alert-sym", placeholder="NVDA")
-    a_pct = st.slider("Move %", 1.0, 20.0, 3.0, 0.5, key="alert-pct")
-    if st.button("Add alert"):
-        made = alert_store.add_alert(a_sym, a_pct)
-        if made:
-            st.success(f"Alert set: {made['symbol']} ±{made['pct']:g}%")
+    alert_kind = st.radio("Alert type",
+                          ["Price move", "Day change %", "News keyword"],
+                          key="alert-kind")
+    if alert_kind == "News keyword":
+        kw = st.text_input("Keyword", key="alert-kw", placeholder="FDA approval")
+        if st.button("Add alert", key="alert-add-kw"):
+            made = alert_store.add_keyword_alert(kw)
+            if made:
+                st.success(f"Keyword alert: '{made['keyword']}'")
+            else:
+                st.warning("Need a keyword (2+ chars), "
+                           "or that alert already exists.")
+    else:
+        a_sym = st.text_input("Symbol", key="alert-sym", placeholder="NVDA")
+        if alert_kind == "Price move":
+            a_pct = st.slider("Move %", 1.0, 20.0, 3.0, 0.5, key="alert-pct")
+            if st.button("Add alert", key="alert-add-price"):
+                made = alert_store.add_alert(a_sym, a_pct)
+                if made:
+                    st.success(f"Alert set: {made['symbol']} ±{made['pct']:g}%")
+                else:
+                    st.warning("Need a symbol and a % above 0 "
+                               "(or that alert already exists).")
         else:
-            st.warning("Need a symbol and a % above 0 "
-                       "(or that alert already exists).")
+            a_thr = st.slider("Day change %", 1.0, 20.0, 3.0, 0.5,
+                              key="alert-thr")
+            if st.button("Add alert", key="alert-add-pct"):
+                made = alert_store.add_pct_alert(a_sym, a_thr)
+                if made:
+                    st.success(f"Alert set: {made['symbol']} "
+                               f"|day| ≥ {made['threshold']:g}%")
+                else:
+                    st.warning("Need a symbol and a % above 0 "
+                               "(or that alert already exists).")
     for a in alert_store.load_alerts():
-        base = (f"${a['baseline']:.2f}" if a.get("baseline")
-                else "arming…")
+        atype = a.get("type", "price")
+        if atype == "pct":
+            label = (f"{a.get('symbol')} |day change| ≥ "
+                     f"{a.get('threshold'):g}%")
+        elif atype == "keyword":
+            label = f"📰 keyword '{a.get('keyword')}'"
+        else:
+            base = (f"${a['baseline']:.2f}" if a.get("baseline")
+                    else "arming…")
+            label = f"{a.get('symbol')} ±{a.get('pct'):g}% • from {base}"
         c1, c2 = st.columns([4, 1])
-        c1.caption(f"{a['symbol']} ±{a['pct']:g}% • from {base}")
+        c1.caption(label)
         if c2.button("❌", key=f"del-{a['id']}"):
             alert_store.remove_alert(a["id"])
             st.rerun()
@@ -838,6 +910,18 @@ with tab_stocks:
         st.caption(
             f"Last scan {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')} • "
             f"{len(stock_results)} results • showing top {config.TOP_N}")
+
+        my_wl = watchlist_store.load_watchlist()
+        if my_wl:
+            section("★", "My watchlist",
+                    "Your tickers — ★ starred pin to the top.")
+            for w in my_wl:
+                res = cached_stock_scan(w["symbol"])
+                if res:
+                    watch_card({**res, "sector": "Watchlist"},
+                               key_prefix=f"wl-{w['symbol']}-")
+                else:
+                    st.caption(f"{w['symbol']}: no data right now.")
 
         if stock_results:
             ticker_tape(stock_results)

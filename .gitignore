@@ -4,3 +4,9 @@
 # Python
 __pycache__/
 *.pyc
+
+# Bandz Terminal runtime data -- never commit
+data/
+marketpulse/watchlist.json
+marketpulse/theme.json
+marketpulse/alerts.json
