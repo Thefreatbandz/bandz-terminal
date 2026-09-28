@@ -7,7 +7,7 @@ UI code lives elsewhere; it only formats what these return.
 
 import asyncio
 
-from . import config
+from . import cache, config
 from .ai import generate_ai_analysis
 from .scoring import calculate_score
 
@@ -63,13 +63,31 @@ async def scan_universe(client, symbols, include_ai=False, news_top_n=None,
     under the 60 calls/minute free-tier limit.
     """
     pause = config.SCAN_DELAY if delay is None else delay
+
+    async def _paced(symbol, want_news, coro):
+        """Run coro, sleeping only when it actually hits the API.
+
+        Quote/news responses are cached, so repeat scans (and pass 2
+        re-quotes) don't need pacing -- only real calls do. This keeps
+        big universes fast on refresh without tripping the 60/min limit.
+        The cache check happens BEFORE the call, so a miss paces the
+        fresh request that follows it.
+        """
+        keys = [f"quote:{symbol}"] + ([f"news:{symbol}"] if want_news else [])
+        missed = any(cache.get_cached(k) is None for k in keys)
+        result = await coro()
+        if missed:
+            await asyncio.sleep(pause)
+        return result
+
     if news_top_n is None:
         results = []
         for symbol in symbols:
-            result = await scan_stock(client, symbol, include_ai=include_ai)
+            result = await _paced(
+                symbol, True,
+                lambda s=symbol: scan_stock(client, s, include_ai=include_ai))
             if result is not None:
                 results.append(result)
-            await asyncio.sleep(pause)
         results.sort(key=lambda item: item["score"], reverse=True)
         return results
 
@@ -77,20 +95,23 @@ async def scan_universe(client, symbols, include_ai=False, news_top_n=None,
     # Pass 1: quotes for everyone (cheap), no AI yet.
     results = []
     for symbol in symbols:
-        result = await scan_stock(client, symbol, include_ai=False,
-                                  include_news=False)
+        result = await _paced(
+            symbol, False,
+            lambda s=symbol: scan_stock(client, s, include_ai=False,
+                                        include_news=False))
         if result is not None:
             results.append(result)
-        await asyncio.sleep(pause)
     results.sort(key=lambda item: item["score"], reverse=True)
 
     # Pass 2: news (+ optional AI) for the biggest movers only.
     for result in results[:news_top_n]:
-        full = await scan_stock(client, result["symbol"],
-                                include_ai=include_ai, include_news=True)
+        full = await _paced(
+            result["symbol"], True,
+            lambda s=result["symbol"]: scan_stock(client, s,
+                                                  include_ai=include_ai,
+                                                  include_news=True))
         if full is not None:
             result.update(full)
-        await asyncio.sleep(pause)
     results.sort(key=lambda item: item["score"], reverse=True)
     return results
 

@@ -122,7 +122,7 @@ class FinnhubClient:
         from datetime import timedelta
 
         today = datetime.now(timezone.utc).date()
-        start = (today - timedelta(days=3)).strftime("%Y-%m-%d")
+        start = (today - timedelta(days=7)).strftime("%Y-%m-%d")
 
         data = await fetch_json(
             self.session,
@@ -139,7 +139,7 @@ class FinnhubClient:
             return []
 
         news = []
-        for item in data[:10]:
+        for item in data[:15]:
             if not isinstance(item, dict):
                 continue
             headline = item.get("headline")
