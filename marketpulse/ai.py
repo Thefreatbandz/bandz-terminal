@@ -14,6 +14,31 @@ from . import config
 
 logger = logging.getLogger("MarketPulse")
 
+#: Prefix of every degraded-mode response below. web.py uses it to avoid
+#: caching fallbacks on disk as if they were real AI answers.
+DEGRADED_PREFIX = "Gemini isn't responding"
+
+
+def _ai_failed(text):
+    """True when _gemini_text returned one of its graceful fallbacks."""
+    return isinstance(text, str) and text.startswith("AI ")
+
+
+def _headline_fallback(symbol, news):
+    """Degraded-mode explanation: the headlines themselves, honestly labeled.
+
+    Used when the Gemini API is unreachable (bad key, outage). Never blank,
+    never invented.
+    """
+    heads = [n.get("headline", "") for n in (news or [])[:3]]
+    heads = [h for h in heads if h]
+    if not heads:
+        return (f"{DEGRADED_PREFIX} right now, and no headlines came "
+                "through — check the News tab or try again in a bit.")
+    lines = "\n".join(f"- {h}" for h in heads)
+    return (f"{DEGRADED_PREFIX} right now — here's what the latest "
+            f"headlines for {symbol} say:\n{lines}")
+
 
 async def _gemini_text(session, prompt):
     """POST a prompt to Gemini, return the text or a fallback message."""
@@ -89,7 +114,10 @@ UNCERTAINTY
 
 Keep the answer concise and readable.
 """
-    return await _gemini_text(session, prompt)
+    text = await _gemini_text(session, prompt)
+    if _ai_failed(text):
+        return _headline_fallback(symbol, news)
+    return text
 
 
 async def generate_mover_explanation(session, symbol, quote, news):
@@ -121,9 +149,8 @@ Do not invent news or prices. Do not predict what happens next.
 This is research, not financial advice.
 """
     text = await _gemini_text(session, prompt)
-    if text.startswith("AI "):  # _gemini_text fallback messages
-        return ("Couldn't pull an explanation right now — "
-                "check the headlines below instead.")
+    if _ai_failed(text):
+        return _headline_fallback(symbol, news)
     return text
 
 
@@ -158,4 +185,13 @@ Format: at most 5 bullets. Each bullet: what moved, the size of the move,
 and the reported headline if there is one. End with one line on what to
 watch next. Keep it tight and readable on a phone.
 """
-    return await _gemini_text(session, prompt)
+    text = await _gemini_text(session, prompt)
+    if _ai_failed(text):
+        # Degraded: plain mover list, no invented commentary.
+        rows = [f"- {i['symbol']}: {i['change_percent']:+.2f}%"
+                for i in items[:12]]
+        if not rows:
+            return f"{DEGRADED_PREFIX} right now — no movers scanned."
+        return (f"{DEGRADED_PREFIX} right now — today's biggest movers:\n"
+                + "\n".join(rows))
+    return text

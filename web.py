@@ -25,7 +25,8 @@ from marketpulse import cache, calibration, config
 from marketpulse import sentiment as sentiment_mod
 from marketpulse import themes as theme_mod
 from marketpulse import watchlist as watchlist_store
-from marketpulse.ai import (generate_ai_analysis, generate_market_brief,
+from marketpulse.ai import (DEGRADED_PREFIX, _gemini_text,
+                            generate_ai_analysis, generate_market_brief,
                             generate_mover_explanation)
 from marketpulse.charts import big_chart_svg
 from marketpulse.data import FinnhubClient
@@ -130,6 +131,21 @@ def disp_price(price_usd):
                          ccy_rates())
 
 
+def esc_dollar(text):
+    """Escape $ for st.markdown.
+
+    Streamlit renders $...$ as LaTeX math, so any two $ figures in one
+    markdown block (prices, 52W ranges, $5B headlines) get mangled into
+    math output. Escaping keeps the literal $ visible.
+    """
+    return text.replace("$", "\\$") if isinstance(text, str) else text
+
+
+def smd(html_text):
+    """st.markdown(unsafe_allow_html=True) with $ escaped (see esc_dollar)."""
+    st.markdown(esc_dollar(html_text), unsafe_allow_html=True)
+
+
 def session_label():
     """Pre-market / after-hours framing for the stock tab."""
     et = datetime.now(ZoneInfo("America/New_York"))
@@ -146,7 +162,7 @@ def session_label():
 
 
 def section(num, title, sub=""):
-    st.markdown(
+    smd(
         f'<div class="bz-sec"><span class="bz-num">{num}</span>'
         f"<h2>{html.escape(title)}</h2></div>",
         unsafe_allow_html=True,
@@ -184,8 +200,7 @@ def index_strip():
             f'<div class="p">{disp_price(q["price"])}</div>'
             f'<div class="c {cls}">{fmt_change(chg)}</div></div>'
         )
-    st.markdown(f'<div class="bz-idx">{"".join(cards)}</div>',
-                unsafe_allow_html=True)
+    smd(f'<div class="bz-idx">{"".join(cards)}</div>')
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -232,8 +247,7 @@ def fx_strip():
             f'<div class="p">{px}</div>'
             f'<div class="c {cls}">{fmt_change(chg)}</div></div>'
         )
-    st.markdown(f'<div class="bz-idx">{"".join(cards)}</div>',
-                unsafe_allow_html=True)
+    smd(f'<div class="bz-idx">{"".join(cards)}</div>')
 
 
 def ticker_tape(results):
@@ -247,8 +261,8 @@ def ticker_tape(results):
             f'<span class="{cls}">{chg:+.2f}%</span></span>'
         )
     half = "".join(items)
-    st.markdown(f'<div class="tape-wrap"><div class="tape-inner">'
-                f"{half}{half}</div></div>", unsafe_allow_html=True)
+    smd(f'<div class="tape-wrap"><div class="tape-inner">'
+                f"{half}{half}</div></div>")
 
 
 def sector_board(summary):
@@ -272,7 +286,7 @@ def sector_board(summary):
             f'font-family:monospace;font-size:12px;">{avg:+.2f}%</div>'
             f"</div>"
         )
-    st.markdown("".join(rows), unsafe_allow_html=True)
+    smd("".join(rows))
 
 
 def heatmap(results):
@@ -296,7 +310,7 @@ def heatmap(results):
             f'<div class="heat-label">{html.escape(sector)}</div>'
             f'<div class="heat">{"".join(tiles)}</div>'
         )
-    st.markdown("".join(parts), unsafe_allow_html=True)
+    smd("".join(parts))
 
 
 def fmt_earnings(date_str):
@@ -337,7 +351,7 @@ def news_wire(results, limit=30):
     body = "".join(rows) or (
         '<div class="bz-witem"><span class="bz-wsym">—</span>'
         "<div><p>No fresh headlines in this scan.</p></div></div>")
-    st.markdown(f'<div class="bz-wire">{body}</div>', unsafe_allow_html=True)
+    smd(f'<div class="bz-wire">{body}</div>')
 
 
 # ---------------- cached data fetching ----------------
@@ -453,6 +467,28 @@ def cached_insider(symbol):
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+def gemini_source():
+    """'live' / 'error' / None based on a real minimal Gemini call.
+
+    Key presence alone can't be trusted (a bad pasted key looks
+    'connected'), so the sidebar reports what this probe finds.
+    """
+    if not config.GEMINI_API_KEY:
+        return None
+
+    async def _go():
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            text = await _gemini_text(session, "Reply with exactly: OK")
+            if isinstance(text, str) and text.strip().upper().startswith("OK"):
+                return "live"
+            return "error"
+    try:
+        return _run(_go())
+    except Exception:
+        return "error"
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def finnhub_source():
     """Where live quotes are actually coming from right now.
 
@@ -550,14 +586,17 @@ def mover_explanation(symbol, quote, news):
             return await generate_mover_explanation(session, symbol,
                                                   quote, news)
     text = _run(_go())
-    disk[key] = text
-    if len(disk) > 200:  # keep the file small
-        disk = dict(list(disk.items())[-200:])
-    try:
-        with open(path, "w") as f:
-            json.dump(disk, f)
-    except OSError:
-        pass
+    # Don't cache degraded (headline-fallback) answers on disk -- a real
+    # AI answer may succeed later the same day.
+    if not text.startswith(DEGRADED_PREFIX):
+        disk[key] = text
+        if len(disk) > 200:  # keep the file small
+            disk = dict(list(disk.items())[-200:])
+        try:
+            with open(path, "w") as f:
+                json.dump(disk, f)
+        except OSError:
+            pass
     return text
 
 
@@ -631,7 +670,7 @@ def watch_card(result, key_prefix=""):
             f'<span class="bz-chip">{html.escape(reco["label"])} · '
             f'{reco["analysts"]}</span>')
 
-    st.markdown(
+    smd(
         f'<div class="bz-card">'
         f'<div class="bz-top"><div>'
         f'<span class="bz-sym">{move_emoji(change)} '
@@ -660,7 +699,7 @@ def watch_card(result, key_prefix=""):
                     line = (f'- <a href="{html.escape(url)}" '
                             f'target="_blank">{head}</a>'
                             if url else f"- {head}")
-                    st.markdown(line, unsafe_allow_html=True)
+                    smd(line)
                     meta = " · ".join(
                         x for x in [item.get("source") or "",
                                     time_ago(item.get("timestamp"))] if x)
@@ -675,12 +714,13 @@ def watch_card(result, key_prefix=""):
     with st.expander("Full chart \u00b7 3 months"):
         closes = cached_daily_closes(symbol)
         if len(closes) >= 2:
-            st.markdown(big_chart_svg(closes), unsafe_allow_html=True)
+            st.markdown(big_chart_svg(closes, price_fmt=disp_price),
+                        unsafe_allow_html=True)
         else:
             st.caption("Chart data unavailable right now.")
     analysis = st.session_state.get(f"analysis-{symbol}")
     if analysis:
-        st.markdown(analysis)
+        st.markdown(esc_dollar(analysis))
 
 
 # ---------------- sidebar ----------------
@@ -798,7 +838,10 @@ with st.sidebar:
                 "yahoo": "degraded (Yahoo fallback)"}.get(fh_src,
                                                          "error — check key")
     st.write("Finnhub:", fh_label if config.FINNHUB_API_KEY else "missing")
-    st.write("Gemini:", "connected" if config.GEMINI_API_KEY else "missing (AI off)")
+    g_src = gemini_source()
+    g_label = {"live": "live", "error": "error — check key"}.get(
+        g_src, "missing (AI off)")
+    st.write("Gemini:", g_label)
     st.divider()
     if st.button("Clear cache"):
         cache.clear()
@@ -933,8 +976,7 @@ with tab_stocks:
                             f'{html.escape(sym)}</div>'
                             f'<p>{fmt_earnings(d.strftime("%Y-%m-%d"))} '
                             f'<span class="gold">· {when}</span></p></div>')
-            st.markdown(f'<div class="bz-wire">{"".join(rows)}</div>',
-                        unsafe_allow_html=True)
+            smd(f'<div class="bz-wire">{"".join(rows)}</div>')
             if len(upcoming) > 30:
                 st.caption(f"+{len(upcoming) - 30} more in the next 30 days.")
         else:
@@ -969,7 +1011,7 @@ with tab_stocks:
                             st.session_state[key] = mover_explanation(
                                 sym, r["quote"], r.get("news", []))
                     if st.session_state.get(key):
-                        st.markdown(st.session_state[key])
+                        st.markdown(esc_dollar(st.session_state[key]))
 
         # 03 — signal calibration
         section("03", "Signal calibration",
@@ -984,7 +1026,10 @@ with tab_stocks:
                 f"avg day {stats['avg_change']:+.2f}% • "
                 f"{stats['first_date']} → {stats['last_date']}")
         else:
-            st.caption("No scored samples yet — check back after more scans.")
+            st.caption(
+                "No scored samples yet — the log fills as scans run with "
+                "live quotes. Note: this free host wipes the log whenever "
+                "the app sleeps, so it restarts often.")
 
         # 04 — news wire
         section("04", "News wire", "Freshest headlines across the scan. "
@@ -1004,7 +1049,7 @@ with tab_stocks:
             brief = st.session_state.get("brief")
             if brief:
                 with st.expander("Market Brief", expanded=True):
-                    st.markdown(brief)
+                    st.markdown(esc_dollar(brief))
 
         # 05 — sectors
         if shown and universe == "Everything 🌐":
@@ -1058,7 +1103,7 @@ with tab_news:
                 sentiment_mod.classify_sentiment(n.get("headline")))
             meta = " · ".join(x for x in [n.get("source") or "",
                                           time_ago(ts)] if x)
-            st.markdown(
+            smd(
                 f"**{html.escape(sym)}** · {link}{pill}  \n"
                 f"<small style='color:#aaa69a'>{html.escape(meta)}</small>",
                 unsafe_allow_html=True)
@@ -1082,7 +1127,7 @@ with tab_news:
                     line = (f'- <a href="{html.escape(url)}" '
                             f'target="_blank">{head}</a>{pill}'
                             if url else f"- {head}{pill}")
-                    st.markdown(line, unsafe_allow_html=True)
+                    smd(line)
                     meta = " · ".join(
                         x for x in [n.get("source") or "",
                                     time_ago(n.get("timestamp"))] if x)

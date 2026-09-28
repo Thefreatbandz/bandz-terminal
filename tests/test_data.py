@@ -179,3 +179,48 @@ def test_yahoo_symbol_mapping():
     assert FinnhubClient._yahoo_symbol("BINANCE:BTCUSDT") == "BTC-USD"
     assert FinnhubClient._yahoo_symbol("BRK.B") == "BRK-B"
     assert FinnhubClient._yahoo_symbol("AAPL") == "AAPL"
+
+
+def test_company_news_uses_finnhub_when_available():
+    cache.clear()
+    payload = [{"headline": "Finnhub story", "summary": "s",
+                "url": "http://fh", "source": "FH", "datetime": 1720000000}]
+    session = UrlStubSession([("finnhub.io", payload, 200)])
+    client = FinnhubClient(session, api_key="fake")
+    news = _run(client.company_news("AAA"))
+    assert len(news) == 1
+    assert news[0]["headline"] == "Finnhub story"
+    assert news[0]["source"] == "FH"
+
+
+def test_company_news_falls_back_to_yahoo():
+    cache.clear()
+    yahoo_payload = {"news": [
+        {"title": "Yahoo story", "link": "http://yh",
+         "publisher": "Yahoo Finance", "providerPublishTime": 1720000000},
+    ]}
+    session = UrlStubSession([
+        ("finnhub.io", {}, 401),
+        ("yahoo", yahoo_payload, 200),
+    ])
+    client = FinnhubClient(session, api_key="fake")
+    news = _run(client.company_news("AAA"))
+    assert len(news) == 1
+    assert news[0]["headline"] == "Yahoo story"
+    assert news[0]["url"] == "http://yh"
+    assert news[0]["source"] == "Yahoo Finance"
+    assert news[0]["timestamp"] == 1720000000
+
+
+def test_company_news_empty_when_both_fail():
+    cache.clear()
+    session = UrlStubSession([
+        ("finnhub.io", {}, 500),
+        ("yahoo", {}, 404),
+    ])
+    client = FinnhubClient(session, api_key="fake")
+    assert _run(client.company_news("AAA")) == []
+
+
+def test_yahoo_news_maps_crypto_symbol():
+    assert FinnhubClient._yahoo_symbol("BINANCE:ETHUSDT") == "ETH-USD"

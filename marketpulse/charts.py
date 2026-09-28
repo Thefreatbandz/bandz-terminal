@@ -16,13 +16,24 @@ def sparkline_points(closes, w=120, h=60):
     return " ".join(pts), closes[0], closes[-1]
 
 
-def big_chart_svg(closes, w=680, h=220):
+def big_chart_svg(closes, w=680, h=220, price_fmt=None):
     """Full-size line chart with min/max dashed guides, labels, and
-    start/end values. Returns an empty string for bad input."""
+    start/end values. Returns an empty string for bad input.
+
+    price_fmt: callable formatting a price for the corner labels
+    (defaults to plain 1,234.50). Any $ it emits is escaped as \\$
+    because this SVG is rendered through st.markdown, where $...$
+    would be parsed as LaTeX math and mangle the markup.
+    """
     closes = [c for c in closes if c]
     if len(closes) < 2:
         return ""
     closes = closes[-90:]
+    fmt = price_fmt or (lambda c: f"{c:,.2f}")
+
+    def _label(value):
+        return fmt(value).replace("$", "\\$")
+
     mn, mx = min(closes), max(closes)
     rng = (mx - mn) or 1.0
     pad, top, bottom = 10, 26, 16
@@ -45,15 +56,15 @@ def big_chart_svg(closes, w=680, h=220):
         f'stroke="#2a3350" stroke-dasharray="4 4" stroke-width="1"/>'
         f'<text x="{w - pad}" y="{y_max - 6:.1f}" text-anchor="end" '
         f'fill="#8b93a7" font-size="11" font-family="monospace">'
-        f'high ${mx:,.2f}</text>'
+        f'high {_label(mx)}</text>'
         f'<text x="{w - pad}" y="{y_min + 14:.1f}" text-anchor="end" '
         f'fill="#8b93a7" font-size="11" font-family="monospace">'
-        f'low ${mn:,.2f}</text>'
+        f'low {_label(mn)}</text>'
         f'<text x="{pad}" y="16" fill="#8b93a7" font-size="11" '
-        f'font-family="monospace">start ${closes[0]:,.2f}</text>'
+        f'font-family="monospace">start {_label(closes[0])}</text>'
         f'<text x="{w - pad}" y="16" text-anchor="end" fill="{color}" '
         f'font-size="11" font-weight="bold" font-family="monospace">'
-        f'end ${closes[-1]:,.2f}</text>'
+        f'end {_label(closes[-1])}</text>'
         f'<polyline points="{line}" fill="none" stroke="{color}" '
         f'stroke-width="2"/>'
         f'</svg>'

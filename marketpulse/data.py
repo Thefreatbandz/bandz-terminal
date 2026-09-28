@@ -197,25 +197,66 @@ class FinnhubClient:
             },
         )
 
-        if not isinstance(data, list):
-            return []
-
         news = []
-        for item in data[:15]:
-            if not isinstance(item, dict):
-                continue
-            headline = item.get("headline")
-            if not headline:
-                continue
-            news.append({
-                "headline": headline,
-                "summary": item.get("summary", ""),
-                "url": item.get("url", ""),
-                "source": item.get("source", ""),
-                "timestamp": item.get("datetime"),
-            })
+        if isinstance(data, list):
+            for item in data[:15]:
+                if not isinstance(item, dict):
+                    continue
+                headline = item.get("headline")
+                if not headline:
+                    continue
+                news.append({
+                    "headline": headline,
+                    "summary": item.get("summary", ""),
+                    "url": item.get("url", ""),
+                    "source": item.get("source", ""),
+                    "timestamp": item.get("datetime"),
+                })
+
+        if not news:
+            # Finnhub news empty or blocked (e.g. from Streamlit Cloud) --
+            # fall back to Yahoo's free search API so the wire never blanks.
+            news = await self._yahoo_news(symbol)
 
         cache.set_cached(cache_key, news, config.NEWS_CACHE_SECONDS)
+        return news
+
+    async def _yahoo_news(self, symbol):
+        """Headlines from Yahoo's free search API. Same dict shape as
+        company_news. Empty list when unreachable."""
+        ysym = self._yahoo_symbol(symbol)
+        try:
+            async with self.session.get(
+                "https://query1.finance.yahoo.com/v1/finance/search",
+                params={"q": ysym},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status != 200:
+                    return []
+                data = await resp.json()
+        except Exception:
+            return []
+        items = data.get("news") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            return []
+        news = []
+        for item in items[:10]:
+            if not isinstance(item, dict):
+                continue
+            title = item.get("title")
+            if not title:
+                continue
+            ts = item.get("providerPublishTime")
+            if isinstance(ts, (int, float)) and ts > 1e12:
+                ts = ts / 1000  # ms -> s
+            news.append({
+                "headline": title,
+                "summary": "",
+                "url": item.get("link", ""),
+                "source": item.get("publisher") or "Yahoo",
+                "timestamp": ts,
+            })
         return news
 
     async def candles(self, symbol, resolution="5", days=1):
