@@ -276,3 +276,79 @@ class FinnhubClient:
 
         cache.set_cached(cache_key, out, 86400)
         return out
+
+    async def recommendation(self, symbol):
+        """Analyst consensus from the most recent recommendation period.
+
+        Returns {"label": "STRONG BUY", "analysts": 28, "buy": 65, ...}
+        or None when unavailable (e.g. plan doesn't cover the endpoint).
+        Cached 24h.
+        """
+        cache_key = f"reco:{symbol}"
+        cached = cache.get_cached(cache_key)
+        if cached is not None:
+            return cached
+
+        data = await fetch_json(
+            self.session,
+            f"{self.BASE_URL}/stock/recommendation",
+            params={"symbol": symbol, "token": self.api_key},
+        )
+
+        result = None
+        if isinstance(data, list) and data:
+            latest = max(data, key=lambda r: r.get("period") or "")
+            counts = {
+                "STRONG BUY": latest.get("strongBuy") or 0,
+                "BUY": latest.get("buy") or 0,
+                "HOLD": latest.get("hold") or 0,
+                "SELL": latest.get("sell") or 0,
+                "STRONG SELL": latest.get("strongSell") or 0,
+            }
+            total = sum(counts.values())
+            if total > 0:
+                label = max(counts, key=counts.get)
+                result = {"label": label, "analysts": total, **counts}
+
+        cache.set_cached(cache_key, result, 86400)
+        return result
+
+    async def forex_rates(self, base="USD"):
+        """Fiat FX rates vs base currency. Returns {code: rate} or {}.
+
+        Uses Yahoo's free chart API (Finnhub's forex endpoints aren't on
+        this plan). Rate = units of `code` per 1 `base`.
+        """
+        cache_key = f"fx:{base}"
+        cached = cache.get_cached(cache_key)
+        if cached is not None:
+            return cached
+
+        pairs = {"EUR": "EURUSD=X", "GBP": "GBPUSD=X", "JPY": "USDJPY=X"}
+        out = {}
+        for code, ysym in pairs.items():
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ysym}"
+            try:
+                async with self.session.get(
+                    url,
+                    params={"interval": "1d", "range": "2d"},
+                    headers={"User-Agent": "Mozilla/5.0",
+                             "Accept-Encoding": "gzip, deflate"},
+                    timeout=15,
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    data = await resp.json()
+                result = (data.get("chart", {}).get("result") or [None])[0]
+                if not result:
+                    continue
+                quote = (result.get("indicators", {}).get("quote") or [{}])[0]
+                closes = [c for c in (quote.get("close") or [])
+                          if isinstance(c, (int, float))]
+                if len(closes) >= 2:
+                    out[code] = {"rate": closes[-1], "prev": closes[-2]}
+            except Exception:
+                continue
+
+        cache.set_cached(cache_key, out, 600)
+        return out

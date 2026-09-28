@@ -92,6 +92,41 @@ Keep the answer concise and readable.
     return await _gemini_text(session, prompt)
 
 
+async def generate_mover_explanation(session, symbol, quote, news):
+    """1-2 sentence explanation of why a symbol moved today.
+
+    Grounded only in the provided quote + headlines. Returns a short
+    string, or a graceful fallback when the AI is unavailable.
+    """
+    if not config.GEMINI_API_KEY:
+        return "AI explanation unavailable. Configure GEMINI_API_KEY."
+    price = quote.get("price", "?")
+    change = quote.get("change_percent", 0)
+    news_text = "\n".join(f"- {item['headline']}" for item in news[:5])
+    if not news_text:
+        news_text = "No fresh headlines were retrieved."
+    prompt = f"""
+You are the research assistant for Bandz Terminal, a stock-watching app.
+
+Symbol: {symbol}
+Price: ${price}
+Day change: {change:+.2f}%
+
+Recent headlines:
+{news_text}
+
+In 1-2 sentences, explain what likely drove today's move, citing the
+reported headlines. If no clear catalyst appears, say so plainly.
+Do not invent news or prices. Do not predict what happens next.
+This is research, not financial advice.
+"""
+    text = await _gemini_text(session, prompt)
+    if text.startswith("AI "):  # _gemini_text fallback messages
+        return ("Couldn't pull an explanation right now — "
+                "check the headlines below instead.")
+    return text
+
+
 async def generate_market_brief(session, items):
     """One-shot briefing over the day's movers.
 

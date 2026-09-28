@@ -11,6 +11,8 @@ bot used: scan -> score -> news -> (on-demand) AI explanation.
 
 import asyncio
 import html
+import json
+import os
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -19,8 +21,10 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
 from marketpulse import alerts as alert_store
-from marketpulse import cache, config
-from marketpulse.ai import generate_ai_analysis, generate_market_brief
+from marketpulse import cache, calibration, config
+from marketpulse import sentiment as sentiment_mod
+from marketpulse.ai import (generate_ai_analysis, generate_market_brief,
+                            generate_mover_explanation)
 from marketpulse.data import FinnhubClient
 from marketpulse.engine import scan_stock, scan_universe, sector_summary
 from marketpulse.format import fmt_change, fmt_price, move_emoji, score_band
@@ -427,10 +431,13 @@ def news_wire(results, limit=30):
                 if url else head)
         meta = " · ".join(x for x in [n.get("source") or "",
                                       time_ago(ts)] if x)
+        pill = sentiment_mod.sentiment_pill(
+            sentiment_mod.classify_sentiment(n.get("headline")))
         rows.append(
             f'<div class="bz-witem"><span class="bz-wsym">'
             f"{html.escape(sym)}</span>"
-            f"<div><p>{link}</p><small>{html.escape(meta)}</small></div></div>"
+            f"<div><p>{link}{pill}</p>"
+            f"<small>{html.escape(meta)}</small></div></div>"
         )
     body = "".join(rows) or (
         '<div class="bz-witem"><span class="bz-wsym">—</span>'
@@ -562,6 +569,55 @@ def explain(symbol, quote, news):
     return _run(_go())
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def cached_recommendation(symbol):
+    """Analyst consensus for a card pill. None when the endpoint is blocked."""
+    async def _go():
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            client = FinnhubClient(session)
+            return await client.recommendation(symbol)
+    return _run(_go())
+
+
+def _mover_cache_file():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "data", "why_moving.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    return path
+
+
+def mover_explanation(symbol, quote, news):
+    """1-2 sentence Gemini explanation of today's move.
+
+    Cached per symbol per day on disk (data/why_moving.json), so repeat
+    views don't burn extra Gemini calls.
+    """
+    path = _mover_cache_file()
+    key = f"{symbol}:{datetime.now(timezone.utc).date().isoformat()}"
+    try:
+        with open(path) as f:
+            disk = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        disk = {}
+    if key in disk:
+        return disk[key]
+
+    async def _go():
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            return await generate_mover_explanation(session, symbol,
+                                                  quote, news)
+    text = _run(_go())
+    disk[key] = text
+    if len(disk) > 200:  # keep the file small
+        disk = dict(list(disk.items())[-200:])
+    try:
+        with open(path, "w") as f:
+            json.dump(disk, f)
+    except OSError:
+        pass
+    return text
+
+
 # ---------------- watch cards ----------------
 
 def watch_card(result, key_prefix=""):
@@ -625,13 +681,20 @@ def watch_card(result, key_prefix=""):
         news_html = ('<div class="bz-news"><span class="bz-src">'
                      "No fresh news retrieved.</span></div>")
 
+    reco = cached_recommendation(symbol)
+    reco_html = ""
+    if reco:
+        reco_html = (
+            f'<span class="bz-chip">{html.escape(reco["label"])} · '
+            f'{reco["analysts"]}</span>')
+
     st.markdown(
         f'<div class="bz-card">'
         f'<div class="bz-top"><div>'
         f'<span class="bz-sym">{move_emoji(change)} '
         f"{html.escape(symbol)}</span>"
         f'<span class="bz-chip">{html.escape(result.get("sector", "Other"))}'
-        f"</span></div>"
+        f"</span>{reco_html}</div>"
         f'<div class="bz-chg {chg_cls}">{fmt_change(change)}</div></div>'
         f'<div class="bz-price">{fmt_price(price)}</div>'
         f"{spark}"
@@ -784,8 +847,45 @@ with tab_stocks:
         for res in shown[:config.TOP_N]:
             watch_card(res)
 
-        # 02 — news wire
-        section("02", "News wire", "Freshest headlines across the scan. "
+        # 02 — why is it moving? (top 6 by |day change|, min 2%)
+        movers = sorted(shown,
+                        key=lambda r: abs(r["quote"]["change_percent"]),
+                        reverse=True)
+        movers = [r for r in movers
+                  if abs(r["quote"]["change_percent"]) >= 2.0][:6]
+        if movers:
+            section("02", "Why is it moving?",
+                    "Biggest |day moves| in this scan — tap for a 1-2 "
+                    "sentence AI read on the headlines.")
+            for r in movers:
+                sym = r["symbol"]
+                chg = r["quote"]["change_percent"]
+                with st.expander(f"❓ {sym} ({chg:+.2f}%) — why?"):
+                    key = f"why-{sym}"
+                    if st.button("Ask Gemini", key=f"{key}-btn"):
+                        with st.spinner("Reading the headlines..."):
+                            st.session_state[key] = mover_explanation(
+                                sym, r["quote"], r.get("news", []))
+                    if st.session_state.get(key):
+                        st.markdown(st.session_state[key])
+
+        # 03 — signal calibration
+        section("03", "Signal calibration",
+                "Do high scores precede green days? Descriptive only — "
+                "the log grows with each day's scan. Not financial advice.")
+        calibration.log_scan(stock_results)
+        stats = calibration.summarize(min_score=70)
+        if stats["count"]:
+            st.caption(
+                f"Scores ≥ 70: **{stats['count']}** samples • "
+                f"{stats['positive_pct']:.0f}% positive • "
+                f"avg day {stats['avg_change']:+.2f}% • "
+                f"{stats['first_date']} → {stats['last_date']}")
+        else:
+            st.caption("No scored samples yet — check back after more scans.")
+
+        # 04 — news wire
+        section("04", "News wire", "Freshest headlines across the scan. "
                 "The 📰 News tab has every story, per symbol.")
         news_wire(shown)
 
@@ -804,17 +904,17 @@ with tab_stocks:
                 with st.expander("✨ Market Brief", expanded=True):
                     st.markdown(brief)
 
-        # 03 — sectors
+        # 05 — sectors
         if shown and universe == "Everything 🌐":
-            section("03", "Sectors today", "Average move per sector.")
+            section("05", "Sectors today", "Average move per sector.")
             sector_board(sector_summary(shown))
 
-        # 04 — heatmap
-        section("04", "Heatmap", "Every symbol, colored by today's move.")
+        # 06 — heatmap
+        section("06", "Heatmap", "Every symbol, colored by today's move.")
         heatmap(shown)
 
         if universe == "Everything 🌐":
-            section("05", "All results", "The full scan table.")
+            section("07", "All results", "The full scan table.")
             st.dataframe(
                 [{
                     "Symbol": r["symbol"],
@@ -852,10 +952,12 @@ with tab_news:
             url = n.get("url") or ""
             link = (f'<a href="{html.escape(url)}" target="_blank">{head}</a>'
                     if url else head)
+            pill = sentiment_mod.sentiment_pill(
+                sentiment_mod.classify_sentiment(n.get("headline")))
             meta = " · ".join(x for x in [n.get("source") or "",
                                           time_ago(ts)] if x)
             st.markdown(
-                f"**{html.escape(sym)}** · {link}  \n"
+                f"**{html.escape(sym)}** · {link}{pill}  \n"
                 f"<small style='color:#aaa69a'>{html.escape(meta)}</small>",
                 unsafe_allow_html=True)
             if n.get("summary"):
@@ -873,9 +975,11 @@ with tab_news:
                 for n in r["news"]:
                     head = html.escape(n["headline"])
                     url = n.get("url") or ""
+                    pill = sentiment_mod.sentiment_pill(
+                        sentiment_mod.classify_sentiment(n.get("headline")))
                     line = (f'- <a href="{html.escape(url)}" '
-                            f'target="_blank">{head}</a>'
-                            if url else f"- {head}")
+                            f'target="_blank">{head}</a>{pill}'
+                            if url else f"- {head}{pill}")
                     st.markdown(line, unsafe_allow_html=True)
                     meta = " · ".join(
                         x for x in [n.get("source") or "",
