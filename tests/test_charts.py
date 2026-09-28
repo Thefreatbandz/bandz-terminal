@@ -79,3 +79,16 @@ def test_big_chart_default_labels_have_no_dollar():
     svg = big_chart_svg([100.0, 105.5])
     assert "$" not in svg
     assert "high 105.50" in svg
+
+
+def test_web_smd_calls_have_no_kwargs():
+    """web.py: smd() takes exactly one positional arg. A stray kwarg
+    (e.g. unsafe_allow_html) raises TypeError at runtime on Streamlit
+    Cloud but is invisible to py_compile and the rest of the suite."""
+    import ast
+    from pathlib import Path
+    tree = ast.parse(Path("web.py").read_text())
+    bad = [n.lineno for n in ast.walk(tree)
+           if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "smd"
+           and (len(n.args) != 1 or n.keywords)]
+    assert not bad, f"smd() calls with wrong signature at lines {bad}"

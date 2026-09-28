@@ -165,7 +165,6 @@ def section(num, title, sub=""):
     smd(
         f'<div class="bz-sec"><span class="bz-num">{num}</span>'
         f"<h2>{html.escape(title)}</h2></div>",
-        unsafe_allow_html=True,
     )
     if sub:
         st.markdown(f'<div class="bz-sub">{html.escape(sub)}</div>',
@@ -686,7 +685,6 @@ def watch_card(result, key_prefix=""):
         f'background:#00e5ff;"></div></div>'
         f"{range_html}{meta_html}{news_html}"
         f"</div>",
-        unsafe_allow_html=True,
     )
 
     c1, c2 = st.columns(2)
@@ -1105,8 +1103,7 @@ with tab_news:
                                           time_ago(ts)] if x)
             smd(
                 f"**{html.escape(sym)}** · {link}{pill}  \n"
-                f"<small style='color:#aaa69a'>{html.escape(meta)}</small>",
-                unsafe_allow_html=True)
+                f"<small style='color:#aaa69a'>{html.escape(meta)}</small>",)
             if n.get("summary"):
                 st.caption(n["summary"][:220])
         st.divider()
