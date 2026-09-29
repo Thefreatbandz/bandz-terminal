@@ -180,8 +180,12 @@ def esc_dollar(text):
     Streamlit renders $...$ as LaTeX math, so any two $ figures in one
     markdown block (prices, 52W ranges, $5B headlines) get mangled into
     math output. Escaping keeps the literal $ visible.
+
+    Uses an HTML entity instead of a backslash: &#36; renders as $ in
+    every markdown/HTML context (a backslash shows literally inside
+    HTML blocks) and never triggers LaTeX.
     """
-    return text.replace("$", "\\$") if isinstance(text, str) else text
+    return text.replace("$", "&#36;") if isinstance(text, str) else text
 
 
 def smd(html_text):

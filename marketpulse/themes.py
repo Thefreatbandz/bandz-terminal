@@ -621,6 +621,9 @@ SHARED_CSS = """
 [data-testid="stBaseButton-primary"] {
   background-image: linear-gradient(180deg, rgba(255,255,255,.18),
                                     rgba(0,0,0,.12)) !important; }
+
+/* Sparklines: let the end dot paint past the viewBox edge */
+.bz-spark { overflow: visible; }
 </style>
 """
 

@@ -63,11 +63,12 @@ def test_shared_css_richness_layer():
     css = themes.SHARED_CSS
     for sel in (".bz-card::before", ".bz-card.up::before",
                 ".bz-card.down::before", ".bz-strip::before",
-                ".bz-sec::after", ".tape-chip",
+                ".bz-sec::after", ".tape-chip", ".bz-spark",
                 '[data-testid="stBaseButton-primary"]'):
         assert sel in css, sel
     assert "var(--accent)" in css
     assert ".bz-num" in css
+    assert "overflow: visible" in css
     # No glow, no animation in the richness layer
     assert "box-shadow: 0 0" not in css
     assert "@keyframes" not in css
