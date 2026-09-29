@@ -64,6 +64,7 @@ def _run(coro):
 
 THEME = theme_mod.load_theme()
 st.markdown(theme_mod.THEME_CSS[THEME], unsafe_allow_html=True)
+st.markdown(theme_mod.SHARED_CSS, unsafe_allow_html=True)
 
 
 def heat_color(pct):
@@ -190,6 +191,18 @@ def section(num, title, sub=""):
                     unsafe_allow_html=True)
 
 
+#: Symbols shown per page in the News tab's per-symbol list.
+NEWS_SYMS_PER_PAGE = 8
+
+
+def paginate(items, page, per_page):
+    """1-based pagination helper. Returns (visible, remaining)."""
+    per_page = max(1, int(per_page or 1))
+    page = max(1, int(page or 1))
+    visible = list(items)[:page * per_page]
+    return visible, list(items)[len(visible):]
+
+
 def command_strip():
     is_open = market_is_open()
     badge = ("open\"><span class=\"dot\"></span>MARKET OPEN" if is_open
@@ -269,18 +282,23 @@ def fx_strip():
 
 
 def ticker_tape(results):
-    """Scrolling marquee of every scanned symbol."""
+    """Ticker strip: every scanned symbol as a swipeable chip row.
+
+    Native horizontal scroll instead of the old infinite CSS marquee --
+    zero constant GPU cost, and touch momentum scrolling works on phones.
+    """
+    if not results:
+        return
     items = []
     for r in results:
         chg = r["quote"]["change_percent"]
         cls = "up" if chg > 0 else "down" if chg < 0 else "flat"
         items.append(
-            f'<span class="tape-item"><b>{html.escape(r["symbol"])}</b> '
+            f'<span class="tape-chip"><b>{html.escape(r["symbol"])}</b> '
             f'<span class="{cls}">{chg:+.2f}%</span></span>'
         )
-    half = "".join(items)
-    smd(f'<div class="tape-wrap"><div class="tape-inner">'
-                f"{half}{half}</div></div>")
+    smd(f'<div class="tape-hint">All symbols — swipe</div>'
+        f'<div class="tape-strip">{"".join(items)}</div>')
 
 
 def sector_board(summary):
@@ -765,41 +783,52 @@ def watch_card(result, key_prefix=""):
                 st.session_state[f"analysis-{symbol}"] = explain(
                     symbol, quote, news)
     with st.expander("Full chart"):
-        tf_opts = list(CHART_TIMEFRAMES.keys())
-        tf = st.radio("Timeframe", tf_opts,
-                      index=tf_opts.index(CHART_DEFAULT),
-                      horizontal=True, key=f"{key_prefix}tf-{symbol}")
-        cmp_sym = (st.text_input("Compare with",
-                                 key=f"{key_prefix}cmp-{symbol}",
-                                 placeholder="e.g. SPY") or "").strip().upper()
-        series = cached_series(symbol, tf)
-        closes = [c for _, c in series]
-        dates = [ts for ts, _ in series]
-        cmp_closes, cmp_label = None, ""
-        if cmp_sym and cmp_sym != symbol:
-            cmp_series = cached_series(cmp_sym, tf)
-            cmp_closes = [c for _, c in cmp_series]
-            if len(cmp_closes) >= 2:
-                cmp_label = cmp_sym
+        # Lazy: the timeframe radio, compare box, and big SVG only render
+        # after the user asks. Otherwise every card ships a full chart's
+        # worth of DOM + widgets on every load (heavy on phones).
+        chart_key = f"{key_prefix}chart-{symbol}"
+        if st.session_state.get(chart_key):
+            tf_opts = list(CHART_TIMEFRAMES.keys())
+            tf = st.radio("Timeframe", tf_opts,
+                          index=tf_opts.index(CHART_DEFAULT),
+                          horizontal=True, key=f"{key_prefix}tf-{symbol}")
+            cmp_sym = (st.text_input(
+                "Compare with", key=f"{key_prefix}cmp-{symbol}",
+                placeholder="e.g. SPY") or "").strip().upper()
+            series = cached_series(symbol, tf)
+            closes = [c for _, c in series]
+            dates = [ts for ts, _ in series]
+            cmp_closes, cmp_label = None, ""
+            if cmp_sym and cmp_sym != symbol:
+                cmp_series = cached_series(cmp_sym, tf)
+                cmp_closes = [c for _, c in cmp_series]
+                if len(cmp_closes) >= 2:
+                    cmp_label = cmp_sym
+                else:
+                    cmp_closes = None  # invalid: quietly single series
+            if len(closes) >= 2:
+                if cmp_closes:
+                    st.markdown(big_chart_svg(
+                        closes, price_fmt=lambda c: f"{c:.1f}", dates=dates,
+                        compare=cmp_closes, label=symbol,
+                        compare_label=cmp_label,
+                        intraday=tf in INTRADAY_TIMEFRAMES),
+                        unsafe_allow_html=True)
+                    st.caption(f"Rebased to 100 — {symbol} vs {cmp_label}. "
+                               "Research only.")
+                else:
+                    st.markdown(big_chart_svg(
+                        closes, price_fmt=disp_price, dates=dates,
+                        intraday=tf in INTRADAY_TIMEFRAMES),
+                        unsafe_allow_html=True)
             else:
-                cmp_closes = None  # invalid symbol: quietly single series
-        if len(closes) >= 2:
-            if cmp_closes:
-                st.markdown(big_chart_svg(
-                    closes, price_fmt=lambda c: f"{c:.1f}", dates=dates,
-                    compare=cmp_closes, label=symbol,
-                    compare_label=cmp_label,
-                    intraday=tf in INTRADAY_TIMEFRAMES),
-                    unsafe_allow_html=True)
-                st.caption(f"Rebased to 100 \u2014 {symbol} vs {cmp_label}. "
-                           "Research only.")
-            else:
-                st.markdown(big_chart_svg(
-                    closes, price_fmt=disp_price, dates=dates,
-                    intraday=tf in INTRADAY_TIMEFRAMES),
-                    unsafe_allow_html=True)
+                st.caption("Chart data unavailable right now.")
         else:
-            st.caption("Chart data unavailable right now.")
+            if st.button("Show chart",
+                         key=f"{key_prefix}showchart-{symbol}"):
+                st.session_state[chart_key] = True
+                st.rerun()
+            st.caption("Loads on tap to keep the page fast.")
     analysis = st.session_state.get(f"analysis-{symbol}")
     if analysis:
         st.markdown(esc_dollar(analysis))
@@ -1217,9 +1246,13 @@ with tab_news:
             if n.get("summary"):
                 st.caption(n["summary"][:220])
         st.divider()
-        # Per-symbol expanders
+        # Per-symbol expanders, paginated: 24 symbols x ~8 stories each
+        # is a lot of DOM on a phone, so load 8 symbols at a time.
         st.subheader("By symbol")
-        for r in with_news:
+        news_page = st.session_state.get("news-sym-page", 1)
+        visible_syms, remaining_syms = paginate(
+            with_news, news_page, NEWS_SYMS_PER_PAGE)
+        for r in visible_syms:
             sym = r["symbol"]
             chg = r["quote"]["change_percent"]
             with st.expander(
@@ -1242,6 +1275,11 @@ with tab_news:
                         st.caption(meta)
                     if n.get("summary"):
                         st.caption(n["summary"][:220])
+        if remaining_syms:
+            if st.button(f"Show more symbols ({len(remaining_syms)} more)",
+                         key="news-sym-more"):
+                st.session_state["news-sym-page"] = news_page + 1
+                st.rerun()
 
 # --- PennyPulse ---
 with tab_penny:

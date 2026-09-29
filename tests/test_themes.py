@@ -22,10 +22,32 @@ def test_all_themes_share_class_set():
     # The HTML in web.py doesn't change, so every theme must define the
     # same core classes.
     core = [".bz-card", ".bz-sym", ".bz-price", ".bz-chg", ".bz-sec",
-            ".bz-wire", ".heat", ".tape-inner", ".bz-strip", ".bz-idxc"]
+            ".bz-wire", ".heat", ".bz-strip", ".bz-idxc"]
     for key, css in themes.THEME_CSS.items():
         for cls in core:
             assert cls in css, f"{key} missing {cls}"
+
+
+def test_shared_css_well_formed():
+    css = themes.SHARED_CSS.strip()
+    assert css.startswith("<style>")
+    assert css.endswith("</style>")
+    assert len(css) > 500
+
+
+def test_shared_css_ticker_strip():
+    # Snap-scroll strip replaces the infinite marquee (perf).
+    assert ".tape-strip" in themes.SHARED_CSS
+    assert ".tape-chip" in themes.SHARED_CSS
+    assert "scroll-snap-type" in themes.SHARED_CSS
+    assert "tape-scroll" not in themes.SHARED_CSS
+    for key, css in themes.THEME_CSS.items():
+        assert "tape-scroll" not in css, f"{key} still has marquee"
+
+
+def test_shared_css_motion_and_mobile():
+    assert "prefers-reduced-motion" in themes.SHARED_CSS
+    assert "max-width: 640px" in themes.SHARED_CSS
 
 
 def test_load_theme_defaults_to_cyber(tmp_path, monkeypatch):

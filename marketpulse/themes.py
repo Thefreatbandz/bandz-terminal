@@ -56,15 +56,7 @@ CYBER_CSS = """
 .bz-idxc .c { font-family: monospace; font-size: 11px; font-weight: 600;
   margin-top: 2px; }
 
-/* ticker tape */
-.tape-wrap { overflow: hidden; white-space: nowrap;
-  border-top: 1px solid #1b232d; border-bottom: 1px solid #1b232d;
-  padding: 6px 0; margin-bottom: 6px; }
-.tape-inner { display: inline-block; animation: tape-scroll 45s linear infinite; }
-@keyframes tape-scroll { from { transform: translateX(0); }
-  to { transform: translateX(-50%); } }
-.tape-item { font-family: monospace; font-size: 12px; margin-right: 24px;
-  color: #8b98a5; }
+/* ticker tape: snap-scroll strip, see SHARED_CSS (.tape-strip) */
 
 /* sections */
 .bz-sec { display: flex; align-items: baseline; gap: 10px; margin: 24px 0 2px;
@@ -174,14 +166,7 @@ GOLD_CSS = """
 .bz-idxc .c { font-family: monospace; font-size: 11px; font-weight: 700;
   margin-top: 2px; }
 
-/* ticker tape */
-.tape-wrap { overflow: hidden; white-space: nowrap;
-  border-top: 1px solid #49453b; border-bottom: 1px solid #49453b;
-  padding: 6px 0; margin-bottom: 6px; }
-.tape-inner { display: inline-block; animation: tape-scroll 45s linear infinite; }
-@keyframes tape-scroll { from { transform: translateX(0); }
-  to { transform: translateX(-50%); } }
-.tape-item { font-family: monospace; font-size: 13px; margin-right: 26px; }
+/* ticker tape: snap-scroll strip, see SHARED_CSS (.tape-strip) */
 
 /* numbered sections */
 .bz-sec { display: flex; align-items: center; gap: 12px; margin: 26px 0 4px; }
@@ -292,14 +277,7 @@ RETRO_CSS = """
 .bz-idxc .c { font-family: monospace; font-size: 11px; font-weight: 700;
   margin-top: 2px; }
 
-.tape-wrap { overflow: hidden; white-space: nowrap;
-  border-top: 1px solid #6b5200; border-bottom: 1px solid #6b5200;
-  padding: 6px 0; margin-bottom: 6px; background: #0a0703; }
-.tape-inner { display: inline-block; animation: tape-scroll 45s linear infinite; }
-@keyframes tape-scroll { from { transform: translateX(0); }
-  to { transform: translateX(-50%); } }
-.tape-item { font-family: monospace; font-size: 13px; margin-right: 26px;
-  color: #ffb000; }
+/* ticker tape: snap-scroll strip, see SHARED_CSS (.tape-strip) */
 
 .bz-sec { display: flex; align-items: center; gap: 12px; margin: 26px 0 4px; }
 .bz-num { display: grid; place-items: center; width: 28px; height: 28px;
@@ -430,15 +408,7 @@ SPACE_CSS = """
 .bz-idxc .c { font-size: 11px; font-weight: 700; margin-top: 2px;
   font-family: monospace; }
 
-.tape-wrap { overflow: hidden; white-space: nowrap;
-  border-top: 1px solid rgba(34,211,238,0.4);
-  border-bottom: 1px solid rgba(34,211,238,0.4);
-  padding: 7px 0; margin-bottom: 6px; background: rgba(34,211,238,0.05); }
-.tape-inner { display: inline-block; animation: tape-scroll 45s linear infinite; }
-@keyframes tape-scroll { from { transform: translateX(0); }
-  to { transform: translateX(-50%); } }
-.tape-item { font-family: monospace; font-size: 13px; margin-right: 26px;
-  color: #a5f3fc; text-shadow: 0 0 8px rgba(34,211,238,0.6); }
+/* ticker tape: snap-scroll strip, see SHARED_CSS (.tape-strip) */
 
 .bz-sec { display: flex; align-items: center; gap: 12px; margin: 26px 0 4px; }
 .bz-num { display: grid; place-items: center; width: 30px; height: 30px;
@@ -542,6 +512,52 @@ THEME_CSS = {
     "retro": RETRO_CSS,
     "space": SPACE_CSS,
 }
+
+#: Shared structural stylesheet, injected after the theme. Theme-agnostic:
+#: motion policy, the snap-scroll ticker strip, card rhythm, and phone
+#: layout. Colors stay in the themes; this only tunes structure.
+SHARED_CSS = """
+<style>
+/* ===== Bandz shared: motion, ticker strip, card rhythm, phones ===== */
+
+/* Ticker strip: native horizontal scroll, zero animation cost.
+   Replaces the old infinite marquee (a constant GPU drain on phones). */
+.tape-strip { display: flex; gap: 8px; overflow-x: auto;
+  padding: 10px 2px; margin: 0 0 12px 0;
+  scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; -ms-overflow-style: none; }
+.tape-strip::-webkit-scrollbar { display: none; }
+.tape-chip { scroll-snap-align: start; flex: none;
+  display: inline-flex; align-items: baseline; gap: 8px;
+  border: 1px solid rgba(255,255,255,.10); border-radius: 9px;
+  padding: 8px 13px; background: rgba(255,255,255,.035);
+  font-family: monospace; font-size: 12px; color: #c2ccd6; }
+.tape-chip b { font-weight: 700; color: #f2f6fa; letter-spacing: .5px; }
+.tape-hint { color: #5b6773; font-size: 10px; font-weight: 600;
+  letter-spacing: 1.5px; text-transform: uppercase; margin: 16px 0 0 2px; }
+
+/* Card rhythm: roomier, calmer */
+.bz-card { padding: 18px; border-radius: 14px; }
+.bz-price { font-size: 34px; letter-spacing: -1px; }
+.bz-sec { margin: 30px 0 4px; }
+
+/* Phones: tighter gutters, slimmer header, readable type */
+@media (max-width: 640px) {
+  .block-container { padding-left: 12px; padding-right: 12px; }
+  .bz-title { font-size: 13px; letter-spacing: 1px; }
+  .bz-strip { padding: 8px 12px; }
+  .bz-card { padding: 14px; border-radius: 12px; }
+  .bz-price { font-size: 30px; }
+  .bz-sec h2 { font-size: 15px; }
+}
+
+/* Respect reduced-motion: kill all animation */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important;
+    transition: none !important; }
+}
+</style>
+"""
 
 
 def load_theme():
