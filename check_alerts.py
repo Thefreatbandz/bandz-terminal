@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check alerts and report any that fired.
 
-Run by cron every 30 minutes on weekdays. Output contract:
+Run by cron every 15 minutes on weekdays. Output contract:
   MARKET_CLOSED  -> market shut, nothing to do (stay silent)
   NO_ALERTS      -> checked, nothing fired (stay silent)
   TRIGGERED: ... -> one line per fired alert (message the user)

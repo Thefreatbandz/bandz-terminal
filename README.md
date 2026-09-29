@@ -1,6 +1,6 @@
 # ⚡ Bandz Terminal
 
-A dark, terminal-style stock market dashboard. 105 tickers across 12 sectors with a sector heatmap, ticker tape, index strip (SPY/QQQ/DIA/IWM), market-status badge, sparklines, AI market brief, 52-week range bars, earnings dates, insider activity, and sidebar price alerts.
+A dark, terminal-style stock market dashboard. 174 tickers across 12 sectors with a sector heatmap, ticker tape, index strip (SPY/QQQ/DIA/IWM), market-status badge, sparklines, AI market brief, 52-week range bars, earnings dates, insider activity, sidebar price alerts, multi-timeframe charts (1D–1Y) with a compare overlay, a results screener, an on-demand AI watchlist digest, and a Stackz paper-trading tab.
 
 > **Disclaimer:** For research and education only — not financial advice.
 
@@ -31,8 +31,15 @@ Run the tests:
 ## Price alerts
 
 Set alerts in the dashboard sidebar. A scheduled checker (`check_alerts.py`, every
-30 minutes on weekdays 9:00a–4:30p ET) arms a baseline on first successful quote
+15 minutes on weekdays 9:00a–4:30p ET) arms a baseline on first successful quote
 and fires when the price moves the configured % from baseline.
+
+## Scheduled scripts
+
+- `scripts/morning_brief.py` — weekday 8:30 AM ET briefing: top gainers/losers, today's earnings, one AI brief.
+- `scripts/evening_recap.py` — weekday 6:30 PM ET recap: biggest movers, today's + tomorrow's earnings, one AI recap paragraph.
+
+Both follow the same stdout contract as `check_alerts.py`: `MARKET_CLOSED` / `NO_ALERTS` / `TRIGGERED:` lines.
 
 ## Deploy to Streamlit Community Cloud (free)
 

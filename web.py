@@ -22,14 +22,18 @@ from streamlit_autorefresh import st_autorefresh
 
 from marketpulse import alerts as alert_store
 from marketpulse import cache, calibration, config
+from marketpulse import screener as screener_mod
 from marketpulse import sentiment as sentiment_mod
+from marketpulse import stackz as stackz_mod
 from marketpulse import themes as theme_mod
 from marketpulse import watchlist as watchlist_store
 from marketpulse.ai import (DEGRADED_PREFIX, _gemini_text,
                             classify_gemini_status, gemini_probe,
                             generate_ai_analysis, generate_market_brief,
-                            generate_mover_explanation)
-from marketpulse.charts import big_chart_svg
+                            generate_mover_explanation,
+                            generate_watchlist_digest)
+from marketpulse.charts import (CHART_DEFAULT, CHART_TIMEFRAMES,
+                                INTRADAY_TIMEFRAMES, big_chart_svg)
 from marketpulse.data import FinnhubClient
 from marketpulse.engine import scan_stock, scan_universe, sector_summary
 from marketpulse.format import (CCY_SYMBOLS, fmt_change, fmt_price,
@@ -109,6 +113,20 @@ def time_ago(ts):
         if mins < 1440:
             return f"{mins // 60}h {mins % 60}m ago"
         return f"{mins // 1440}d ago"
+    except (TypeError, ValueError):
+        return ""
+
+
+def stackz_time_et(iso):
+    """ISO timestamp -> 'Sep 29 · 12:31p' in Eastern time."""
+    try:
+        dt = datetime.fromisoformat(iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        et = dt.astimezone(ZoneInfo("America/New_York"))
+        hour = et.hour % 12 or 12
+        ap = "a" if et.hour < 12 else "p"
+        return f"{et:%b} {et.day} · {hour}:{et.minute:02d}{ap}"
     except (TypeError, ValueError):
         return ""
 
@@ -371,21 +389,34 @@ def cached_universe_scan(symbols, include_ai=False, news_top_n=None,
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def cached_daily_series(symbol):
-    """~90 days of (unix_ts, close) for the full-size chart expander.
+def cached_series(symbol, tf_key):
+    """(unix_ts, close) pairs for the full-size chart at a timeframe.
 
-    Yahoo-first (Finnhub /stock/candle isn't covered by this plan).
+    tf_key: one of CHART_TIMEFRAMES ("1D".."1Y", default "3M").
+    Yahoo-first (Finnhub /stock/candle isn't covered by this plan);
+    Finnhub stays as the fallback for the default 3M view.
     """
+    rng, interval = CHART_TIMEFRAMES.get(tf_key,
+                                         CHART_TIMEFRAMES[CHART_DEFAULT])
     async def _go():
         async with aiohttp.ClientSession(trust_env=True) as session:
-            series = await _yahoo_series(session, symbol, rng="3mo",
-                                         interval="1d")
-            if len(series) < 2:
+            series = await _yahoo_series(session, symbol, rng=rng,
+                                         interval=interval)
+            if len(series) < 2 and tf_key == CHART_DEFAULT:
                 client = FinnhubClient(session)
                 closes = await client.candles(symbol)
                 series = [(None, c) for c in closes]
             return series
     return _run(_go())
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def cached_stackz():
+    """Stackz paper-trading snapshot (public gist, refreshed ~15 min).
+
+    Never raises; None means the honest empty state in the Stackz tab.
+    """
+    return stackz_mod.fetch_stackz_snapshot()
 
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -547,6 +578,14 @@ def explain(symbol, quote, news):
     async def _go():
         async with aiohttp.ClientSession(trust_env=True) as session:
             return await generate_ai_analysis(session, symbol, quote, news)
+    return _run(_go())
+
+
+def watchlist_digest(items):
+    """On-demand AI digest over the user's watchlist. Never auto-runs."""
+    async def _go():
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            return await generate_watchlist_digest(session, items)
     return _run(_go())
 
 
@@ -725,14 +764,40 @@ def watch_card(result, key_prefix=""):
             with st.spinner("Asking Gemini..."):
                 st.session_state[f"analysis-{symbol}"] = explain(
                     symbol, quote, news)
-    with st.expander("Full chart \u00b7 3 months"):
-        series = cached_daily_series(symbol)
+    with st.expander("Full chart"):
+        tf_opts = list(CHART_TIMEFRAMES.keys())
+        tf = st.radio("Timeframe", tf_opts,
+                      index=tf_opts.index(CHART_DEFAULT),
+                      horizontal=True, key=f"{key_prefix}tf-{symbol}")
+        cmp_sym = (st.text_input("Compare with",
+                                 key=f"{key_prefix}cmp-{symbol}",
+                                 placeholder="e.g. SPY") or "").strip().upper()
+        series = cached_series(symbol, tf)
         closes = [c for _, c in series]
         dates = [ts for ts, _ in series]
+        cmp_closes, cmp_label = None, ""
+        if cmp_sym and cmp_sym != symbol:
+            cmp_series = cached_series(cmp_sym, tf)
+            cmp_closes = [c for _, c in cmp_series]
+            if len(cmp_closes) >= 2:
+                cmp_label = cmp_sym
+            else:
+                cmp_closes = None  # invalid symbol: quietly single series
         if len(closes) >= 2:
-            st.markdown(big_chart_svg(closes, price_fmt=disp_price,
-                                      dates=dates),
-                        unsafe_allow_html=True)
+            if cmp_closes:
+                st.markdown(big_chart_svg(
+                    closes, price_fmt=lambda c: f"{c:.1f}", dates=dates,
+                    compare=cmp_closes, label=symbol,
+                    compare_label=cmp_label,
+                    intraday=tf in INTRADAY_TIMEFRAMES),
+                    unsafe_allow_html=True)
+                st.caption(f"Rebased to 100 \u2014 {symbol} vs {cmp_label}. "
+                           "Research only.")
+            else:
+                st.markdown(big_chart_svg(
+                    closes, price_fmt=disp_price, dates=dates,
+                    intraday=tf in INTRADAY_TIMEFRAMES),
+                    unsafe_allow_html=True)
         else:
             st.caption("Chart data unavailable right now.")
     analysis = st.session_state.get(f"analysis-{symbol}")
@@ -796,7 +861,7 @@ with st.sidebar:
             st.rerun()
     st.divider()
     st.subheader("Alerts")
-    st.caption("Checked every 30 min during market hours. "
+    st.caption("Checked every 15 min during market hours. "
                "A push lands on your phone when one fires.")
     alert_kind = st.radio("Alert type",
                           ["Price move", "Day change %", "News keyword"],
@@ -907,8 +972,8 @@ if search_sym and search_sym.strip():
         st.warning(f"No market data for '{sym}' — check the symbol.")
     st.divider()
 
-tab_stocks, tab_news, tab_penny, tab_crypto = st.tabs(
-    ["Stocks", "News", "Penny", "Crypto"])
+tab_stocks, tab_news, tab_penny, tab_crypto, tab_stackz, tab_screener = st.tabs(
+    ["Stocks", "News", "Penny", "Crypto", "Stackz", "Screener"])
 
 # --- shared stock scan (MarketPulse + News tabs) ---
 news_top_n = None
@@ -968,6 +1033,28 @@ with tab_stocks:
                                key_prefix=f"wl-{w['symbol']}-")
                 else:
                     st.caption(f"{w['symbol']}: no data right now.")
+
+            # Watchlist digest: on-demand AI, never auto-runs.
+            if st.button("Generate watchlist digest", key="wl-digest-btn"):
+                with st.spinner("Reading your watchlist..."):
+                    items = []
+                    for w in my_wl:
+                        res = cached_stock_scan(w["symbol"])
+                        if not res:
+                            continue
+                        q = res.get("quote") or {}
+                        items.append({
+                            "symbol": w["symbol"],
+                            "price": q.get("price"),
+                            "change_pct": q.get("change_percent"),
+                            "headlines": [n.get("headline", "")
+                                          for n in res.get("news", [])[:3]],
+                        })
+                    st.session_state["wl_digest"] = watchlist_digest(items)
+            digest = st.session_state.get("wl_digest")
+            if digest:
+                with st.expander("Watchlist digest", expanded=True):
+                    st.markdown(esc_dollar(digest))
 
         # Earnings calendar: next 30 days, scanned universe only.
         section("", "Earnings calendar",
@@ -1194,6 +1281,122 @@ with tab_crypto:
         base = res["symbol"].split(":")[-1].replace("USDT", "")
         watch_card({**res, "symbol": base, "sector": "Crypto"},
                    key_prefix="crypto-")
+
+# --- Stackz (paper trading) ---
+with tab_stackz:
+    section("", "Stackz — paper trading",
+            "Live snapshot from the Stackz paper-trading bot. "
+            "Paper trading only — no real money. Research only.")
+    snap = cached_stackz()
+    if not snap or not stackz_mod.is_fresh(snap):
+        st.caption("Paper-trading sync hasn't landed yet — it refreshes "
+                   "after each Stackz run.")
+    else:
+        eq = stackz_mod.effective_equity(snap)
+        pnl = stackz_mod.day_pnl_pct(snap)
+        poss = stackz_mod.paper_positions(snap)
+        trades = stackz_mod.recent_trades(snap, 10)
+        ks_status, ks_pnl = stackz_mod.kill_switch(snap)
+        age = stackz_mod.snapshot_age_minutes(snap)
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Paper equity",
+                  f"${eq:,.2f}" if isinstance(eq, (int, float)) else "—")
+        c2.metric("Day P&L",
+                  fmt_change(pnl) if isinstance(pnl, (int, float)) else "—")
+        c3.metric("Open positions", str(len(poss)))
+
+        ks_ok = (ks_status or "").upper() == "OK"
+        dot = "#39ff88" if ks_ok else "#ff3b5c"
+        ks_note = (f" · day {fmt_change(ks_pnl)}"
+                   if isinstance(ks_pnl, (int, float)) else "")
+        smd(f'<span style="display:inline-block;width:10px;height:10px;'
+            f'border-radius:50%;background:{dot};margin-right:6px;"></span>'
+            f'<b>Kill switch:</b> {html.escape(str(ks_status or "unknown"))}'
+            f'{ks_note}')
+        if isinstance(age, (int, float)):
+            st.caption(f"Snapshot from {int(age)} min ago.")
+
+        st.subheader("Positions")
+        if not poss:
+            st.caption("No open positions right now.")
+        for p in poss:
+            pnl_v = p.get("pnl")
+            pnl_col = "#39ff88" if (pnl_v or 0) >= 0 else "#ff3b5c"
+
+            def _usd(v):
+                return f"${v:,.2f}" if isinstance(v, (int, float)) else "—"
+
+            qty = (f"{p['qty']:.6g}"
+                   if isinstance(p.get("qty"), (int, float)) else "—")
+            smd(f'<div class="bz-witem"><div class="bz-wsym">'
+                f'{html.escape(p["symbol"])}</div>'
+                f'<p>{qty} @ {_usd(p.get("avg"))} → {_usd(p.get("last"))} · '
+                f'<span style="color:{pnl_col}">'
+                f'{stackz_mod.signed_dollars(pnl_v)}</span> · '
+                f'stop {_usd(p.get("stop"))} / target {_usd(p.get("target"))}'
+                f'</p></div>')
+
+        st.subheader("Recent trades")
+        if not trades:
+            st.caption("No trades in this snapshot.")
+        for t in trades:
+            sym = html.escape(str(t.get("symbol") or "?"))
+            side = html.escape(str(t.get("side") or "?").upper())
+            strat = html.escape(str(t.get("strategy") or ""))
+            price = (f"${t['price']:,.2f}"
+                     if isinstance(t.get("price"), (int, float)) else "—")
+            rpnl = stackz_mod.signed_dollars(t.get("realized_pnl"))
+            reason = html.escape(str(t.get("reason") or ""))
+            smd(f'<div class="bz-witem"><div class="bz-wsym">{sym} {side}'
+                f'</div><p>{stackz_time_et(t.get("time"))} · {price} · '
+                f'{strat} · realized {rpnl}</p>'
+                f'<p>{reason}</p></div>')
+
+# --- Screener ---
+with tab_screener:
+    section("", "Screener",
+            "Filter this scan's results — no rescan needed. "
+            "Passing a filter is not a buy signal.")
+    if not stock_results:
+        st.caption("Run a scan first — the screener filters the latest "
+                   "results.")
+    else:
+        f1, f2 = st.columns(2)
+        pmin = f1.number_input("Min price", min_value=0.0, value=0.0,
+                               step=1.0, key="scr-pmin")
+        pmax = f2.number_input("Max price", min_value=0.0, value=0.0,
+                               step=1.0, key="scr-pmax", help="0 = no cap")
+        min_move = st.slider("Min |day %|", 0.0, 20.0, 0.0, 0.5,
+                             key="scr-move")
+        min_score = st.slider("Min score", 0, 100, 0, key="scr-score")
+        sector = st.selectbox("Sector", ["All"] + list(config.SECTORS),
+                              key="scr-sector")
+        sort_by = st.radio("Sort by", ["Score", "Day %"], horizontal=True,
+                           key="scr-sort")
+        rows = screener_mod.apply_filters(
+            stock_results,
+            price_min=pmin or None,
+            price_max=pmax or None,
+            min_abs_change=min_move,
+            sector=sector,
+            min_score=min_score)
+        rows = screener_mod.sort_results(
+            rows, sort_by="change" if sort_by == "Day %" else "score")
+        if not rows:
+            st.caption("No matches — loosen the filters.")
+        else:
+            st.caption(f"{len(rows)} matches.")
+            st.dataframe(
+                [{
+                    "Symbol": r["symbol"],
+                    "Sector": r.get("sector", "Other"),
+                    "Price": disp_price(r["quote"]["price"]),
+                    "Change": fmt_change(r["quote"]["change_percent"]),
+                    "Score": r["score"],
+                } for r in rows],
+                width="stretch",
+            )
 
 st.divider()
 st.caption("Bandz Terminal • Data: Finnhub + Yahoo (charts) • "
