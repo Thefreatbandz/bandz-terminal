@@ -64,7 +64,9 @@ def _run(coro):
 
 THEME = theme_mod.load_theme()
 st.markdown(theme_mod.THEME_CSS[THEME], unsafe_allow_html=True)
-st.markdown(theme_mod.SHARED_CSS, unsafe_allow_html=True)
+# getattr guard: shared CSS is progressive enhancement -- a missing
+# constant must never crash the app (e.g. partial deploy sync).
+st.markdown(getattr(theme_mod, "SHARED_CSS", ""), unsafe_allow_html=True)
 
 
 def heat_color(pct):
