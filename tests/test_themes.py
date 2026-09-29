@@ -50,6 +50,29 @@ def test_shared_css_motion_and_mobile():
     assert "max-width: 640px" in themes.SHARED_CSS
 
 
+def test_theme_accent_vars():
+    expected = {"cyber": "#22d3ee", "gold": "#d4af37",
+                "retro": "#ffb000", "space": "#22d3ee"}
+    for key, accent in expected.items():
+        css = themes.THEME_CSS[key]
+        assert f"--accent: {accent}" in css, key
+        assert "--up:" in css and "--down:" in css, key
+
+
+def test_shared_css_richness_layer():
+    css = themes.SHARED_CSS
+    for sel in (".bz-card::before", ".bz-card.up::before",
+                ".bz-card.down::before", ".bz-strip::before",
+                ".bz-sec::after", ".tape-chip",
+                '[data-testid="stBaseButton-primary"]'):
+        assert sel in css, sel
+    assert "var(--accent)" in css
+    assert ".bz-num" in css
+    # No glow, no animation in the richness layer
+    assert "box-shadow: 0 0" not in css
+    assert "@keyframes" not in css
+
+
 def test_load_theme_defaults_to_cyber(tmp_path, monkeypatch):
     monkeypatch.setattr(themes, "THEME_FILE", str(tmp_path / "theme.json"))
     assert themes.load_theme() == "cyber"

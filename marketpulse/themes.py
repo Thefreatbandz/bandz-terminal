@@ -21,6 +21,7 @@ THEMES = {
 CYBER_CSS = """
 <style>
 /* PRO TERMINAL -- refined dark, restrained cyan accent */
+:root { --accent: #22d3ee; --up: #34d399; --down: #f87171; }
 .block-container { padding-top: 1rem; max-width: 1100px; }
 .up { color: #34d399; } .down { color: #f87171; }
 .flat { color: #8b98a5; } .gold { color: #22d3ee; }
@@ -139,6 +140,7 @@ a { color: #22d3ee !important; }
 GOLD_CSS = """
 <style>
 /* Gold on charcoal -- Stackz blotter theme */
+:root { --accent: #d4af37; --up: #48d597; --down: #ff6b63; }
 .block-container { padding-top: 1rem; max-width: 1100px; }
 .up { color: #48d597; } .down { color: #ff6b63; }
 .flat { color: #aaa69a; } .gold { color: #d4af37; }
@@ -241,6 +243,7 @@ GOLD_CSS = """
 RETRO_CSS = """
 <style>
 /* RETRO CRT theme -- amber/green phosphor, scanlines, chunky monospace */
+:root { --accent: #ffb000; --up: #33ff33; --down: #ff3333; }
 .block-container { padding-top: 1rem; max-width: 1100px; }
 .up { color: #33ff33; } .down { color: #ff3333; }
 .flat { color: #8a7a55; } .gold { color: #ffb000; }
@@ -365,6 +368,7 @@ a { color: #ffb000 !important; }
 SPACE_CSS = """
 <style>
 /* SPACE theme -- nebula backdrop, glassmorphic cards, cyan/violet glow */
+:root { --accent: #22d3ee; --up: #4ade80; --down: #fb7185; }
 .block-container { padding-top: 1rem; max-width: 1100px; }
 .up { color: #4ade80; } .down { color: #fb7185; }
 .flat { color: #8b93b8; } .gold { color: #22d3ee; }
@@ -556,6 +560,67 @@ SHARED_CSS = """
   *, *::before, *::after { animation: none !important;
     transition: none !important; }
 }
+
+/* ---- richness layer: depth without noise ----
+   Inset top-light + faint gradients + accent edges. No glows,
+   no grids, no animation: restraint kept, blandness removed. */
+.stApp {
+  background-image:
+    radial-gradient(120% 55% at 50% 0%, rgba(255,255,255,.028),
+                    transparent 70%);
+}
+
+/* Watch cards: glassy top-light, directional accent tick */
+.bz-card { position: relative;
+  background-image: linear-gradient(180deg, rgba(255,255,255,.025),
+                                    transparent 42%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
+.bz-card::before { content: ""; position: absolute; top: -1px;
+  left: 14px; right: 14px; height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent),
+                              transparent);
+  opacity: .5; }
+.bz-card.up::before {
+  background: linear-gradient(90deg, transparent, var(--up), transparent);
+  opacity: .75; }
+.bz-card.down::before {
+  background: linear-gradient(90deg, transparent, var(--down), transparent);
+  opacity: .75; }
+
+/* Header strip: sheen + accent edge */
+.bz-strip { position: relative; overflow: hidden;
+  background-image: linear-gradient(180deg, rgba(255,255,255,.035),
+                                    transparent 60%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
+.bz-strip::before { content: ""; position: absolute; left: 0; top: 0;
+  bottom: 0; width: 3px;
+  background: linear-gradient(180deg, var(--accent), transparent);
+  opacity: .85; }
+
+/* Section number becomes a small accent pill */
+.bz-num { background: rgba(255,255,255,.05); color: var(--accent);
+  border: 1px solid rgba(255,255,255,.08);
+  padding: 3px 9px; border-radius: 20px; }
+
+/* Section divider fades out instead of a hard rule */
+.bz-sec { border-bottom: 0; position: relative; padding-bottom: 10px; }
+.bz-sec::after { content: ""; position: absolute; left: 0; right: 0;
+  bottom: 0; height: 1px; opacity: .4;
+  background: linear-gradient(90deg, var(--accent),
+                              rgba(255,255,255,.10) 35%, transparent); }
+
+/* Ticker chips + heat tiles + index cards: top-light */
+.tape-chip { background-image: linear-gradient(180deg,
+              rgba(255,255,255,.055), transparent 70%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.07); }
+.tile { box-shadow: inset 0 1px 0 rgba(255,255,255,.09); }
+.bz-idxc, [data-testid="stExpander"] {
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.04); }
+
+/* Primary buttons: subtle sheen over the theme accent */
+[data-testid="stBaseButton-primary"] {
+  background-image: linear-gradient(180deg, rgba(255,255,255,.18),
+                                    rgba(0,0,0,.12)) !important; }
 </style>
 """
 

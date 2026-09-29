@@ -11,6 +11,7 @@ bot used: scan -> score -> news -> (on-demand) AI explanation.
 
 import asyncio
 import html
+import itertools
 import json
 import os
 from datetime import date, datetime, timezone
@@ -84,8 +85,14 @@ def heat_color(pct):
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
+_spark_ids = itertools.count(1)
+
+
 def spark_svg(closes, w=320, h=56):
-    """Tiny hand-rolled sparkline -- no widget weight, blotter style."""
+    """Tiny hand-rolled sparkline -- no widget weight, blotter style.
+
+    Line plus a soft gradient area fill and an end dot for depth.
+    """
     if len(closes) < 2:
         return ""
     closes = closes[-60:]
@@ -97,10 +104,24 @@ def spark_svg(closes, w=320, h=56):
         y = h - 4 - (c - mn) / rng * (h - 8)
         pts.append(f"{x:.1f},{y:.1f}")
     color = "#34d399" if closes[-1] >= closes[0] else "#f87171"
+    gid = f"sg{next(_spark_ids)}"
+    url = f"#{gid}"  # built outside braces: # starts a comment in f-strings
+    line = " ".join(pts)
+    x0 = pts[0].split(",")[0]
+    xn, yn = pts[-1].split(",")
+    area = f"{x0},{h} {line} {xn},{h}"
     return (
         f'<svg class="bz-spark" viewBox="0 0 {w} {h}" '
-        f'preserveAspectRatio="none"><polyline points="{" ".join(pts)}" '
-        f'fill="none" stroke="{color}" stroke-width="2"/></svg>'
+        f'preserveAspectRatio="none">'
+        f'<defs><linearGradient id="{gid}" x1="0" y1="0" x2="0" y2="1">'
+        f'<stop offset="0" stop-color="{color}" stop-opacity=".22"/>'
+        f'<stop offset="1" stop-color="{color}" stop-opacity="0"/>'
+        f"</linearGradient></defs>"
+        f'<polygon points="{area}" fill="url({url})"/>'
+        f'<polyline points="{line}" fill="none" stroke="{color}" '
+        f'stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>'
+        f'<circle cx="{xn}" cy="{yn}" r="3" fill="{color}"/>'
+        "</svg>"
     )
 
 
@@ -745,7 +766,7 @@ def watch_card(result, key_prefix=""):
             f'{reco["analysts"]}</span>')
 
     smd(
-        f'<div class="bz-card">'
+        f'<div class="bz-card {chg_cls}">'
         f'<div class="bz-top"><div>'
         f'<span class="bz-sym">{move_emoji(change)} '
         f"{html.escape(symbol)}</span>"
