@@ -220,6 +220,53 @@ This is research, not financial advice.
     return text
 
 
+async def generate_watchlist_digest(session, items):
+    """On-demand digest: what moved in the user's watchlist today and why.
+
+    items: list of dicts with symbol, price, change_pct, headlines[].
+    One Gemini call, grounded ONLY in the provided prices + headlines.
+    Degraded path is labeled with DEGRADED_PREFIX, never blank.
+    """
+    if not config.GEMINI_API_KEY:
+        return "AI digest unavailable. Configure GEMINI_API_KEY."
+
+    def _chg(it):
+        c = it.get("change_pct")
+        return f"{c:+.2f}%" if isinstance(c, (int, float)) else "n/a"
+
+    lines = []
+    for it in items[:15]:
+        heads = [h for h in (it.get("headlines") or []) if h]
+        head = heads[0] if heads else "no fresh headline"
+        lines.append(f"{it.get('symbol')}: {_chg(it)} @ {it.get('price')} "
+                     f"— {head}")
+    board = "\n".join(lines) if lines else "Watchlist is empty."
+
+    prompt = f"""
+You are the research assistant for Bandz Terminal, a stock-watching app.
+The user asked: what moved in my watchlist today, and why?
+
+Today's watchlist:
+{board}
+
+Write a short digest based ONLY on the data above. Do not invent news,
+prices, or catalysts. For each symbol that moved notably, give the size
+of the move and the reported headline behind it if there is one; if no
+clear catalyst appears, say so plainly. End with one line on what to
+watch next. Keep it tight and readable on a phone. This is research,
+not financial advice.
+"""
+    text = await _gemini_text(session, prompt)
+    if _ai_failed(text):
+        rows = [f"- {it.get('symbol')}: {_chg(it)}" for it in items[:15]]
+        if not rows:
+            return (f"{DEGRADED_PREFIX} right now — your watchlist is "
+                    "empty or has no data.")
+        return (f"{DEGRADED_PREFIX} right now — your watchlist today:\n"
+                + "\n".join(rows))
+    return text
+
+
 async def generate_market_brief(session, items):
     """One-shot briefing over the day's movers.
 

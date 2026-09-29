@@ -151,3 +151,37 @@ def test_classify_gemini_status_cases():
     assert classify_gemini_status(False, "HTTP 404: models/x is not found") == "model-not-found"
     assert classify_gemini_status(False, "network unreachable") == "network"
     assert classify_gemini_status(False, "HTTP 500: backend error") == "error"
+
+
+# --- generate_watchlist_digest ---
+
+from marketpulse.ai import generate_watchlist_digest
+
+DIGEST_ITEMS = [
+    {"symbol": "NVDA", "price": 180.0, "change_pct": 4.2,
+     "headlines": ["Nvidia beats earnings, shares jump"]},
+    {"symbol": "SOFI", "price": 12.0, "change_pct": -3.1, "headlines": []},
+]
+
+
+def test_watchlist_digest_success_path(monkeypatch):
+    async def fake_gemini(session, prompt):
+        assert "NVDA" in prompt and "SOFI" in prompt
+        return "Digest: NVDA up on earnings."
+    monkeypatch.setattr("marketpulse.ai._gemini_text", fake_gemini)
+    text = _run(generate_watchlist_digest(FailSession(), DIGEST_ITEMS))
+    assert text == "Digest: NVDA up on earnings."
+
+
+def test_watchlist_digest_falls_back_labeled():
+    text = _run(generate_watchlist_digest(FailSession(), DIGEST_ITEMS))
+    assert text.startswith(DEGRADED_PREFIX)
+    assert "NVDA" in text
+    # never the raw internal error message
+    assert "AI analysis failed." not in text
+
+
+def test_watchlist_digest_empty_items_fallback():
+    text = _run(generate_watchlist_digest(FailSession(), []))
+    assert text.startswith(DEGRADED_PREFIX)
+    assert "empty" in text
