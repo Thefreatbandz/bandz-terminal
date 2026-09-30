@@ -39,7 +39,7 @@ from marketpulse.data import FinnhubClient
 from marketpulse.engine import scan_stock, scan_universe, sector_summary
 from marketpulse.format import (CCY_SYMBOLS, fmt_change, fmt_price,
                                 fmt_price_ccy, fx_rates_from_strip,
-                                move_emoji, score_band)
+                                score_band)
 from marketpulse.scoring import penny_qualifies
 
 st.set_page_config(page_title="Bandz Terminal", page_icon="⚡", layout="wide")
@@ -191,6 +191,13 @@ def esc_dollar(text):
 def smd(html_text):
     """st.markdown(unsafe_allow_html=True) with $ escaped (see esc_dollar)."""
     st.markdown(esc_dollar(html_text), unsafe_allow_html=True)
+
+
+def dir_glyph(change):
+    """Text direction glyph for titles (▲/▼/•) — no emoji."""
+    if not isinstance(change, (int, float)):
+        return "•"
+    return "▲" if change > 0 else "▼" if change < 0 else "•"
 
 
 def session_label():
@@ -719,8 +726,7 @@ def watch_card(result, key_prefix=""):
         range_html = (
             f'<span class="bz-label">52W {disp_price(lo52)} – {disp_price(hi52)} · '
             f"AT {pos:.0%}</span>"
-            f'<div class="bz-bar"><div style="width:{pos * 100:.0f}%;'
-            f'background:#00e5ff;"></div></div>'
+            f'<div class="bz-bar"><div style="width:{pos * 100:.0f}%;"></div></div>'
         )
 
     meta_lines = []
@@ -754,10 +760,7 @@ def watch_card(result, key_prefix=""):
             f'<span class="bz-src">{html.escape(src_line)}</span></div>'
         )
     if items_html:
-        news_html = (
-            f'<div class="bz-news"><span class="bz-label" '
-            f'style="margin-top:0;">NEWS</span>{items_html}</div>'
-        )
+        news_html = f'<div class="bz-news">{items_html}</div>'
     else:
         news_html = ('<div class="bz-news"><span class="bz-src">'
                      "No fresh news retrieved.</span></div>")
@@ -772,8 +775,7 @@ def watch_card(result, key_prefix=""):
     smd(
         f'<div class="bz-card {chg_cls}">'
         f'<div class="bz-top"><div>'
-        f'<span class="bz-sym">{move_emoji(change)} '
-        f"{html.escape(symbol)}</span>"
+        f'<span class="bz-sym">{html.escape(symbol)}</span>'
         f'<span class="bz-chip">{html.escape(result.get("sector", "Other"))}'
         f"</span>{reco_html}</div>"
         f'<div class="bz-chg {chg_cls}">{fmt_change(change)}</div></div>'
@@ -781,8 +783,6 @@ def watch_card(result, key_prefix=""):
         f"{spark}"
         f'<span class="bz-label">SCORE {score}/100 · '
         f"{html.escape(score_band(score)).upper()}</span>"
-        f'<div class="bz-bar"><div style="width:{min(score, 100)}%;'
-        f'background:#00e5ff;"></div></div>'
         f"{range_html}{meta_html}{news_html}"
         f"</div>",
     )
@@ -1283,7 +1283,7 @@ with tab_news:
             sym = r["symbol"]
             chg = r["quote"]["change_percent"]
             with st.expander(
-                    f"{move_emoji(chg)} {sym} — "
+                    f"{dir_glyph(chg)} {sym} — "
                     f"{fmt_change(chg)} ({len(r['news'])} stories)",
                     expanded=False):
                 for n in r["news"]:

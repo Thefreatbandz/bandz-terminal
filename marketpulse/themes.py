@@ -624,6 +624,10 @@ SHARED_CSS = """
 
 /* Sparklines: let the end dot paint past the viewBox edge */
 .bz-spark { overflow: visible; }
+
+/* Range bars: slim, theme-accented, muted — no neon */
+.bz-bar { height: 4px; }
+.bz-bar > div { background: var(--accent); opacity: .55; }
 </style>
 """
 
