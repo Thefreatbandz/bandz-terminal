@@ -216,3 +216,127 @@ def big_chart_svg(closes, w=680, h=220, price_fmt=None, dates=None,
         f'stroke-width="2"/>'
         f'</svg>'
     )
+
+
+#: Google-Finance-style timeframe set for the detail panel.
+#: Label -> (Yahoo range, Yahoo interval).
+GF_TIMEFRAMES = {
+    "1D": ("1d", "5m"),
+    "5D": ("5d", "15m"),
+    "1M": ("1mo", "1d"),
+    "6M": ("6mo", "1d"),
+    "YTD": ("ytd", "1d"),
+}
+GF_DEFAULT = "1M"
+
+#: Human label for the change readout, e.g. "-11.40 (-5.32%) past month".
+GF_RANGE_LABEL = {
+    "1D": "today",
+    "5D": "past week",
+    "1M": "past month",
+    "6M": "past 6 months",
+    "YTD": "year to date",
+}
+
+GF_UP = "#34d399"
+GF_DOWN = "#f87171"
+
+
+def timeframe_change(closes):
+    """(absolute, percent) change from first to last close.
+
+    Returns (None, None) for unusable input.
+    """
+    closes = [c for c in closes if c]
+    if len(closes) < 2 or not closes[0]:
+        return None, None
+    first, last = closes[0], closes[-1]
+    return last - first, (last - first) / first * 100.0
+
+
+def gf_chart_svg(closes, dates=None, w=680, h=240, line=None,
+                 intraday=False):
+    """Google-Finance-style area chart: gradient fill, axis labels,
+    end dot. Returns "" for bad input.
+
+    line: stroke color; defaults to GF_UP/GF_DOWN by trend.
+    dates: unix timestamps, one per close, for the bottom axis.
+    intraday: bottom labels show Eastern clock time ("9:30a").
+    """
+    closes = [c for c in closes if c]
+    if len(closes) < 2:
+        return ""
+    closes = closes[-180:]
+    if dates is not None:
+        dates = list(dates)[-len(closes):]
+        if len(dates) != len(closes):
+            dates = None
+    color = line or (GF_UP if closes[-1] >= closes[0] else GF_DOWN)
+    mn, mx = min(closes), max(closes)
+    rng = (mx - mn) or 1.0
+    pad_l, pad_r, top, bottom = 44, 10, 12, 28
+
+    def _x(i):
+        return pad_l + i / (len(closes) - 1) * (w - pad_l - pad_r)
+
+    def _y(c):
+        return top + (1 - (c - mn) / rng) * (h - top - bottom)
+
+    pts = " ".join(f"{_x(i):.1f},{_y(c):.1f}"
+                   for i, c in enumerate(closes))
+    area = (f"M{pad_l:.1f},{_y(closes[0]):.1f} L"
+            + " L".join(f"{_x(i):.1f},{_y(c):.1f}"
+                        for i, c in enumerate(closes))
+            + f" L{_x(len(closes) - 1):.1f},{h - bottom:.1f}"
+            + f" L{pad_l:.1f},{h - bottom:.1f} Z")
+
+    # 4 y-axis labels + gridlines.
+    ylab = ""
+    for k in range(4):
+        v = mn + rng * k / 3
+        y = _y(v)
+        ylab += (
+            f'<line x1="{pad_l}" y1="{y:.1f}" x2="{w - pad_r}" '
+            f'y2="{y:.1f}" stroke="#232b40" stroke-width="1"/>'
+            f'<text x="{pad_l - 6}" y="{y + 3.5:.1f}" text-anchor="end" '
+            f'fill="#8b93a7" font-size="10" font-family="monospace">'
+            f'{v:,.0f}</text>'
+        )
+
+    # ~4 date labels along the bottom.
+    xlab = ""
+    if dates:
+        tick_fn = _time_label if intraday else _tick_label
+        n = len(closes)
+        k = min(4, n)
+        idxs = sorted({round(i * (n - 1) / (k - 1)) for i in range(k)}
+                      ) if k > 1 else [0]
+        for i in idxs:
+            lab = tick_fn(dates[i])
+            if not lab:
+                continue
+            xlab += (
+                f'<text x="{_x(i):.1f}" y="{h - 8}" text-anchor="middle" '
+                f'fill="#8b93a7" font-size="10" font-family="monospace">'
+                f'{lab}</text>'
+            )
+
+    ex, ey = _x(len(closes) - 1), _y(closes[-1])
+    gid = f"gfa{abs(hash(pts)) % 100000}"
+    return (
+        f'<svg width="100%" viewBox="0 0 {w} {h}" '
+        f'style="display:block">'
+        f'<defs><linearGradient id="{gid}" x1="0" y1="0" x2="0" y2="1">'
+        f'<stop offset="0" stop-color="{color}" stop-opacity="0.28"/>'
+        f'<stop offset="1" stop-color="{color}" stop-opacity="0.02"/>'
+        f'</linearGradient></defs>'
+        f'{ylab}'
+        f'<path d="{area}" fill="url(#{gid})"/>'
+        f'<polyline points="{pts}" fill="none" stroke="{color}" '
+        f'stroke-width="2.5" stroke-linejoin="round"/>'
+        f'<circle cx="{ex:.1f}" cy="{ey:.1f}" r="5" fill="{color}"/>'
+        f'<circle cx="{ex:.1f}" cy="{ey:.1f}" r="9" fill="{color}" '
+        f'fill-opacity="0.18"/>'
+        f'{xlab}'
+        f'</svg>'
+    )

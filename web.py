@@ -33,8 +33,9 @@ from marketpulse.ai import (DEGRADED_PREFIX, _gemini_text,
                             generate_ai_analysis, generate_market_brief,
                             generate_mover_explanation,
                             generate_watchlist_digest)
-from marketpulse.charts import (CHART_DEFAULT, CHART_TIMEFRAMES,
-                                INTRADAY_TIMEFRAMES, big_chart_svg)
+from marketpulse.charts import (GF_DEFAULT, GF_RANGE_LABEL, GF_TIMEFRAMES,
+                                INTRADAY_TIMEFRAMES, gf_chart_svg,
+                                timeframe_change)
 from marketpulse.data import FinnhubClient
 from marketpulse.engine import scan_stock, scan_universe, sector_summary
 from marketpulse.format import (CCY_SYMBOLS, fmt_change, fmt_price,
@@ -441,24 +442,18 @@ def cached_universe_scan(symbols, include_ai=False, news_top_n=None,
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def cached_series(symbol, tf_key):
-    """(unix_ts, close) pairs for the full-size chart at a timeframe.
+def cached_gf_series(symbol, tf_key):
+    """(unix_ts, close) pairs for the detail panel (GF timeframes).
 
-    tf_key: one of CHART_TIMEFRAMES ("1D".."1Y", default "3M").
-    Yahoo-first (Finnhub /stock/candle isn't covered by this plan);
-    Finnhub stays as the fallback for the default 3M view.
+    Yahoo-first; no Finnhub fallback (its /stock/candle isn't covered
+    by this plan). [] when unavailable.
     """
-    rng, interval = CHART_TIMEFRAMES.get(tf_key,
-                                         CHART_TIMEFRAMES[CHART_DEFAULT])
+    rng, interval = GF_TIMEFRAMES.get(tf_key,
+                                      GF_TIMEFRAMES[GF_DEFAULT])
     async def _go():
         async with aiohttp.ClientSession(trust_env=True) as session:
-            series = await _yahoo_series(session, symbol, rng=rng,
-                                         interval=interval)
-            if len(series) < 2 and tf_key == CHART_DEFAULT:
-                client = FinnhubClient(session)
-                closes = await client.candles(symbol)
-                series = [(None, c) for c in closes]
-            return series
+            return await _yahoo_series(session, symbol, rng=rng,
+                                       interval=interval)
     return _run(_go())
 
 
@@ -708,6 +703,84 @@ def mover_explanation(symbol, quote, news):
 
 # ---------------- watch cards ----------------
 
+def detail_panel(result, key_prefix=""):
+    """Google-Finance-style detail view for one asset.
+
+    Big price + timeframe change, 1D/5D/1M/6M/YTD pills, gradient
+    area chart, key stats grid. Lazy: nothing renders until the user
+    taps "Show details", keeping the initial page light on phones.
+    """
+    quote = result["quote"]
+    symbol = result["symbol"]
+    price = quote["price"]
+
+    det_key = f"{key_prefix}dtl-{symbol}"
+    if not st.session_state.get(det_key):
+        if st.button("Show details", key=f"{key_prefix}dshow-{symbol}"):
+            st.session_state[det_key] = True
+            st.rerun()
+        st.caption("Price, chart & key stats — loads on tap.")
+        return
+
+    tf_opts = list(GF_TIMEFRAMES.keys())
+    tf = (st.pills("Timeframe", tf_opts, default=GF_DEFAULT,
+                   label_visibility="collapsed",
+                   key=f"{key_prefix}dtf-{symbol}")
+          or GF_DEFAULT)
+    series = cached_gf_series(symbol, tf)
+    closes = [c for _, c in series]
+    dates = [ts for ts, _ in series]
+    chg_abs, chg_pct = timeframe_change(closes)
+    up = (chg_abs or 0) >= 0
+    chg_cls = "up" if up else "down"
+    arrow = "▲" if up else "▼"
+    if chg_abs is None:
+        chg_html = '<div class="bz-gf-chg">—</div>'
+    else:
+        chg_html = (
+            f'<div class="bz-gf-chg {chg_cls}">{arrow} '
+            f'{disp_price(abs(chg_abs))} '
+            f'({chg_pct:+.2f}%) {GF_RANGE_LABEL.get(tf, "")}</div>')
+    src = html.escape(quote.get("source") or "")
+    ago = time_ago(quote.get("timestamp"))
+    asof = f"As of {ago}" if ago else "Quote"
+    smd(
+        f'<div class="bz-gf-head">'
+        f'<div class="bz-gf-price">{disp_price(price)}</div>'
+        f'{chg_html}'
+        f'<div class="bz-gf-asof">{asof}'
+        f'{" · " + src if src else ""}</div>'
+        f'</div>',
+    )
+
+    if len(closes) >= 2:
+        smd(
+            gf_chart_svg(closes, dates=dates,
+                         intraday=tf in INTRADAY_TIMEFRAMES),
+        )
+    else:
+        st.caption("Chart data unavailable right now.")
+
+    hi52, lo52 = cached_52w(symbol)
+
+    def _cell(label, value):
+        txt = (disp_price(value)
+               if isinstance(value, (int, float)) and value else "—")
+        return (f'<div class="bz-stat"><span>{label}</span>'
+                f'<b>{txt}</b></div>')
+
+    smd(
+        '<div class="bz-stats">'
+        + _cell("Open", quote.get("open"))
+        + _cell("High", quote.get("high"))
+        + _cell("Low", quote.get("low"))
+        + _cell("Prev close", quote.get("previous_close"))
+        + _cell("52-wk high", hi52)
+        + _cell("52-wk low", lo52)
+        + '</div>',
+    )
+
+
 def watch_card(result, key_prefix=""):
     """One watched asset, blotter style: price, spark, score, news."""
     quote = result["quote"]
@@ -809,53 +882,8 @@ def watch_card(result, key_prefix=""):
             with st.spinner("Asking Gemini..."):
                 st.session_state[f"analysis-{symbol}"] = explain(
                     symbol, quote, news)
-    with st.expander("Full chart"):
-        # Lazy: the timeframe radio, compare box, and big SVG only render
-        # after the user asks. Otherwise every card ships a full chart's
-        # worth of DOM + widgets on every load (heavy on phones).
-        chart_key = f"{key_prefix}chart-{symbol}"
-        if st.session_state.get(chart_key):
-            tf_opts = list(CHART_TIMEFRAMES.keys())
-            tf = st.radio("Timeframe", tf_opts,
-                          index=tf_opts.index(CHART_DEFAULT),
-                          horizontal=True, key=f"{key_prefix}tf-{symbol}")
-            cmp_sym = (st.text_input(
-                "Compare with", key=f"{key_prefix}cmp-{symbol}",
-                placeholder="e.g. SPY") or "").strip().upper()
-            series = cached_series(symbol, tf)
-            closes = [c for _, c in series]
-            dates = [ts for ts, _ in series]
-            cmp_closes, cmp_label = None, ""
-            if cmp_sym and cmp_sym != symbol:
-                cmp_series = cached_series(cmp_sym, tf)
-                cmp_closes = [c for _, c in cmp_series]
-                if len(cmp_closes) >= 2:
-                    cmp_label = cmp_sym
-                else:
-                    cmp_closes = None  # invalid: quietly single series
-            if len(closes) >= 2:
-                if cmp_closes:
-                    st.markdown(big_chart_svg(
-                        closes, price_fmt=lambda c: f"{c:.1f}", dates=dates,
-                        compare=cmp_closes, label=symbol,
-                        compare_label=cmp_label,
-                        intraday=tf in INTRADAY_TIMEFRAMES),
-                        unsafe_allow_html=True)
-                    st.caption(f"Rebased to 100 — {symbol} vs {cmp_label}. "
-                               "Research only.")
-                else:
-                    st.markdown(big_chart_svg(
-                        closes, price_fmt=disp_price, dates=dates,
-                        intraday=tf in INTRADAY_TIMEFRAMES),
-                        unsafe_allow_html=True)
-            else:
-                st.caption("Chart data unavailable right now.")
-        else:
-            if st.button("Show chart",
-                         key=f"{key_prefix}showchart-{symbol}"):
-                st.session_state[chart_key] = True
-                st.rerun()
-            st.caption("Loads on tap to keep the page fast.")
+    with st.expander("Details"):
+        detail_panel(result, key_prefix=key_prefix)
     analysis = st.session_state.get(f"analysis-{symbol}")
     if analysis:
         st.markdown(esc_dollar(analysis))

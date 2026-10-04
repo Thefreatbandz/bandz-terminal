@@ -628,6 +628,29 @@ SHARED_CSS = """
 /* Range bars: slim, theme-accented, muted — no neon */
 .bz-bar { height: 4px; }
 .bz-bar > div { background: var(--accent); opacity: .55; }
+
+/* ---- Detail panel: Google-Finance-style quote view ----
+   Big price, timeframe change, gradient chart, stats grid.
+   Restrained: card surfaces, theme up/down, no glow. */
+.bz-gf-head { padding: 6px 2px 10px; }
+.bz-gf-price { font-size: 40px; font-weight: 700; letter-spacing: -1.5px;
+  color: #f2f6fa; line-height: 1.1; font-family: monospace; }
+.bz-gf-chg { font-size: 15px; font-weight: 600; margin-top: 4px;
+  font-family: monospace; }
+.bz-gf-chg.up { color: var(--up); }
+.bz-gf-chg.down { color: var(--down); }
+.bz-gf-asof { font-size: 11px; color: #5b6773; margin-top: 4px; }
+.bz-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.06);
+  border-radius: 10px; overflow: hidden; margin-top: 12px; }
+.bz-stat { background: rgba(10,13,20,.72); padding: 10px 12px;
+  display: flex; justify-content: space-between; align-items: baseline; }
+.bz-stat span { font-size: 11px; color: #8b93a7; }
+.bz-stat b { font-size: 13px; font-weight: 600; color: #e6ebf2;
+  font-family: monospace; }
+@media (max-width: 640px) {
+  .bz-gf-price { font-size: 34px; }
+}
 </style>
 """
 
