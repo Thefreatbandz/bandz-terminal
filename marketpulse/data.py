@@ -455,3 +455,58 @@ class FinnhubClient:
 
         cache.set_cached(cache_key, out, 600)
         return out
+
+
+def parse_yahoo_volumes(payload):
+    """Daily volumes (oldest -> newest) from a Yahoo chart payload.
+
+    Pure function so it can be unit-tested without HTTP.
+    """
+    try:
+        result = (payload.get("chart", {}).get("result") or [None])[0]
+        if not result:
+            return []
+        quote = (result.get("indicators", {}).get("quote") or [{}])[0]
+        vols = quote.get("volume") or []
+        return [v for v in vols
+                if isinstance(v, (int, float)) and v > 0]
+    except (AttributeError, TypeError):
+        return []
+
+
+async def yahoo_daily_volumes(session, symbol, days=30):
+    """~1 month of daily volumes via Yahoo's free chart API (no key).
+
+    Returns oldest -> newest list of ints. Empty when unavailable.
+    """
+    ysym = (symbol.split(":")[-1].replace("USDT", "-USD")
+            if ":" in symbol else symbol)
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ysym}"
+    try:
+        async with session.get(
+            url,
+            params={"interval": "1d", "range": "1mo"},
+            headers={"User-Agent": "Mozilla/5.0",
+                     "Accept-Encoding": "gzip, deflate"},
+            timeout=15,
+        ) as resp:
+            if resp.status != 200:
+                return []
+            payload = await resp.json()
+        return parse_yahoo_volumes(payload)[-days:]
+    except Exception:
+        return []
+
+
+def unusual_volume_ratio(volumes, lookback=20):
+    """Yesterday's volume vs the prior `lookback`-day average.
+
+    Returns the ratio (float) or None when there isn't enough data.
+    """
+    if not volumes or len(volumes) < lookback + 1:
+        return None
+    baseline = volumes[-(lookback + 1):-1]
+    avg = sum(baseline) / len(baseline)
+    if avg <= 0:
+        return None
+    return volumes[-1] / avg

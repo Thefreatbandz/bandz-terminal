@@ -28,8 +28,11 @@ import aiohttp  # noqa: E402
 
 from marketpulse.ai import generate_market_brief  # noqa: E402
 from marketpulse.config import CORE_STOCKS, FINNHUB_API_KEY  # noqa: E402
-from marketpulse.data import FinnhubClient  # noqa: E402
+from marketpulse.data import (FinnhubClient, unusual_volume_ratio,  # noqa: E402
+                              yahoo_daily_volumes)
 from marketpulse.engine import scan_universe  # noqa: E402
+
+VOLUME_SPIKE_X = 2.0  # yesterday's volume vs 20-day avg
 
 ET = ZoneInfo("America/New_York")
 
@@ -79,6 +82,19 @@ async def _brief(now):
         print(f"TRIGGERED: Earnings today: {', '.join(todays)}")
     else:
         print("TRIGGERED: No earnings reports scheduled today.")
+
+    # Unusual volume: yesterday's volume vs 20-day average (Yahoo daily).
+    spikes = []
+    async with aiohttp.ClientSession(trust_env=True) as session:
+        for r in scored:
+            vols = await yahoo_daily_volumes(session, r["symbol"])
+            ratio = unusual_volume_ratio(vols)
+            if ratio is not None and ratio >= VOLUME_SPIKE_X:
+                spikes.append((r["symbol"], ratio))
+    if spikes:
+        spikes.sort(key=lambda t: t[1], reverse=True)
+        legs = ", ".join(f"{s} {x:.1f}x avg" for s, x in spikes[:5])
+        print(f"TRIGGERED: Unusual volume last session: {legs}")
 
     movers = sorted(scored,
                     key=lambda r: abs(r["quote"]["change_percent"]),
