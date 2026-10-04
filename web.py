@@ -34,8 +34,9 @@ from marketpulse.ai import (DEGRADED_PREFIX, _gemini_text,
                             generate_mover_explanation,
                             generate_watchlist_digest)
 from marketpulse.charts import (GF_DEFAULT, GF_RANGE_LABEL, GF_TIMEFRAMES,
-                                INTRADAY_TIMEFRAMES, gf_chart_svg,
-                                timeframe_change)
+                                INTRADAY_TIMEFRAMES, big_chart_svg,
+                                equal_weight_rebased, gf_chart_svg,
+                                rebase_to_100, timeframe_change)
 from marketpulse.data import FinnhubClient
 from marketpulse.engine import scan_stock, scan_universe, sector_summary
 from marketpulse.format import (CCY_SYMBOLS, fmt_change, fmt_price,
@@ -455,6 +456,30 @@ def cached_gf_series(symbol, tf_key):
             return await _yahoo_series(session, symbol, rng=rng,
                                        interval=interval)
     return _run(_go())
+
+
+def watchlist_benchmark(symbols, tf_key):
+    """Equal-weighted watchlist vs SPY, rebased to 100.
+
+    Returns (wl_pct, spy_pct, wl_rebased, spy_rebased) or None when
+    there isn't enough history.
+    """
+    closes_map = {}
+    for sym in list(symbols) + ["SPY"]:
+        closes = [c for _, c in cached_gf_series(sym, tf_key) if c]
+        if len(closes) >= 2:
+            closes_map[sym] = closes
+    spy = closes_map.get("SPY")
+    wl_lists = [closes_map[s] for s in symbols if s in closes_map]
+    if not spy or not wl_lists:
+        return None
+    avg = equal_weight_rebased(wl_lists)
+    spy_rb = rebase_to_100(spy)[-len(avg):]
+    if len(avg) < 2 or len(spy_rb) < 2:
+        return None
+    wl_pct = (avg[-1] - avg[0]) / avg[0] * 100
+    spy_pct = (spy_rb[-1] - spy_rb[0]) / spy_rb[0] * 100
+    return wl_pct, spy_pct, avg, spy_rb
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -1117,6 +1142,37 @@ with tab_stocks:
                                key_prefix=f"wl-{w['symbol']}-")
                 else:
                     st.caption(f"{w['symbol']}: no data right now.")
+
+            # Benchmark: equal-weighted watchlist vs SPY, rebased to 100.
+            btf = (st.pills("Benchmark", ["1M", "6M", "YTD"], default="1M",
+                            label_visibility="collapsed",
+                            key="wl-bench-tf") or "1M")
+            with st.spinner("Benchmarking your watchlist..."):
+                bench = watchlist_benchmark(
+                    [w["symbol"] for w in my_wl], btf)
+            if bench:
+                wl_pct, spy_pct, wl_rb, spy_rb = bench
+                wl_cls = "up" if wl_pct >= spy_pct else "down"
+                smd(
+                    f'<div class="bz-bench">'
+                    f'<span>Watchlist '
+                    f'<b class="bz-bench-num {wl_cls}">'
+                    f'{wl_pct:+.2f}%</b></span>'
+                    f'<span class="bz-bench-vs">vs</span>'
+                    f'<span>SPY <b class="bz-bench-num">'
+                    f'{spy_pct:+.2f}%</b></span>'
+                    f'<span class="bz-bench-tf">{btf}</span>'
+                    f'</div>',
+                )
+                smd(
+                    big_chart_svg(wl_rb, price_fmt=lambda c: f"{c:.1f}",
+                                  compare=spy_rb, label="Watchlist",
+                                  compare_label="SPY"),
+                )
+                st.caption("Equal-weighted, rebased to 100. "
+                           "Research only.")
+            else:
+                st.caption("Not enough history to benchmark right now.")
 
             # Watchlist digest: on-demand AI, never auto-runs.
             if st.button("Generate watchlist digest", key="wl-digest-btn"):

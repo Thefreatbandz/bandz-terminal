@@ -664,6 +664,17 @@ SHARED_CSS = """
 .bz-why .bz-chg.flat { color: #8b93a7; }
 .bz-why p { margin: 4px 0 0; font-size: 13px; color: #aeb8c6;
   line-height: 1.45; }
+
+/* Watchlist vs SPY benchmark header */
+.bz-bench { display: flex; align-items: baseline; gap: 10px;
+  padding: 4px 2px 10px; font-family: monospace; font-size: 14px;
+  color: #aeb8c6; }
+.bz-bench-num { font-size: 20px; font-weight: 700; color: #e6ebf2; }
+.bz-bench-num.up { color: var(--up); }
+.bz-bench-num.down { color: var(--down); }
+.bz-bench-vs { font-size: 11px; color: #5b6773;
+  text-transform: uppercase; letter-spacing: 1px; }
+.bz-bench-tf { margin-left: auto; font-size: 11px; color: #5b6773; }
 </style>
 """
 

@@ -340,3 +340,18 @@ def gf_chart_svg(closes, dates=None, w=680, h=240, line=None,
         f'{xlab}'
         f'</svg>'
     )
+
+
+def equal_weight_rebased(lists):
+    """Equal-weighted average of several price series, rebased to 100.
+
+    Each series is rebased individually, then all are tail-aligned to
+    the shortest and averaged point-wise. Returns [] when unusable.
+    """
+    rbs = [rebase_to_100(c) for c in lists]
+    rbs = [r for r in rbs if len(r) >= 2]
+    if not rbs:
+        return []
+    n = min(len(r) for r in rbs)
+    rbs = [r[-n:] for r in rbs]
+    return [sum(v) / len(v) for v in zip(*rbs)]
