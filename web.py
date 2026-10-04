@@ -1184,6 +1184,9 @@ with tab_stocks:
             watch_card(res)
 
         # 02 — why is it moving? (top 6 by |day change|, min 2%)
+        # Auto-read: the AI line renders inline, no tap needed. Reads
+        # are cached per symbol per day on disk, so repeat views cost
+        # nothing and the spinner only works on the first load.
         movers = sorted(shown,
                         key=lambda r: abs(r["quote"]["change_percent"]),
                         reverse=True)
@@ -1191,19 +1194,28 @@ with tab_stocks:
                   if abs(r["quote"]["change_percent"]) >= 2.0][:6]
         if movers:
             section("02", "Why is it moving?",
-                    "Biggest day moves in this scan — tap for a 1-2 "
-                    "sentence AI read on the headlines.")
-            for r in movers:
+                    "Biggest day moves in this scan — AI read on "
+                    "the headlines.")
+            with st.spinner("Reading the headlines..."):
+                reads = [(r, mover_explanation(r["symbol"], r["quote"],
+                                               r.get("news", [])))
+                         for r in movers]
+            for r, text in reads:
                 sym = r["symbol"]
                 chg = r["quote"]["change_percent"]
-                with st.expander(f"{sym} ({chg:+.2f}%) — why?"):
-                    key = f"why-{sym}"
-                    if st.button("Ask Gemini", key=f"{key}-btn"):
-                        with st.spinner("Reading the headlines..."):
-                            st.session_state[key] = mover_explanation(
-                                sym, r["quote"], r.get("news", []))
-                    if st.session_state.get(key):
-                        st.markdown(esc_dollar(st.session_state[key]))
+                chg_cls = ("up" if chg > 0 else
+                           "down" if chg < 0 else "flat")
+                if text.startswith(DEGRADED_PREFIX):
+                    line = "AI read unavailable right now."
+                else:
+                    line = text
+                smd(
+                    f'<div class="bz-why">'
+                    f'<span class="bz-sym">{html.escape(sym)}</span>'
+                    f'<span class="bz-chg {chg_cls}">'
+                    f'{html.escape(fmt_change(chg))}</span>'
+                    f'<p>{html.escape(line)}</p></div>',
+                )
 
         # 03 — signal calibration
         section("03", "Signal calibration",

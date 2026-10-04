@@ -651,6 +651,19 @@ SHARED_CSS = """
 @media (max-width: 640px) {
   .bz-gf-price { font-size: 34px; }
 }
+
+/* Why-it's-moving: auto AI reads on the day's biggest movers */
+.bz-why { padding: 10px 2px 12px;
+  border-bottom: 1px solid rgba(255,255,255,.06); }
+.bz-why:last-child { border-bottom: none; }
+.bz-why .bz-sym { font-size: 15px; font-weight: 700; }
+.bz-why .bz-chg { font-family: monospace; font-size: 13px;
+  margin-left: 8px; }
+.bz-why .bz-chg.up { color: var(--up); }
+.bz-why .bz-chg.down { color: var(--down); }
+.bz-why .bz-chg.flat { color: #8b93a7; }
+.bz-why p { margin: 4px 0 0; font-size: 13px; color: #aeb8c6;
+  line-height: 1.45; }
 </style>
 """
 
