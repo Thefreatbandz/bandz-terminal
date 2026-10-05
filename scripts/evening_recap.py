@@ -7,11 +7,11 @@ check_alerts.py / morning_brief.py (the scheduled runner consumes these):
   NO_ALERTS      -> ran fine, nothing notable
   TRIGGERED:...  -> recap lines the runner messages to the user
 
-Contents: today's biggest movers (Core 25), today's + tomorrow's
+Contents: today's biggest movers (Core), today's + tomorrow's
 earnings, and a one-paragraph Gemini recap of the session.
 Research/watch-only -- not financial advice.
 
-Runtime: one Core-25 scan with light pacing, same as morning_brief.
+Runtime: one Core scan with light pacing, same as morning_brief.
 """
 
 import asyncio

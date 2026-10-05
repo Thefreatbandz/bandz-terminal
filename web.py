@@ -918,7 +918,7 @@ def watch_card(result, key_prefix=""):
 
 with st.sidebar:
     st.header("Controls")
-    universe = st.radio("Universe", ["Core 25", "Everything", "Custom"])
+    universe = st.radio("Universe", ["Core", "Everything", "Custom"])
 
     theme_label = st.radio(
         "Theme", ["Cyber", "Gold", "Retro CRT", "Space"],

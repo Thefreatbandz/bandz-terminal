@@ -23,6 +23,7 @@ CORE_STOCKS = [
     "SMCI", "COIN", "MRNA", "LLY", "BA",
     "NFLX", "MSTR", "CRWD", "RIVN", "NIO",
     "INTC", "MU", "ARM", "SOFI", "HOOD",
+    "TTWO",
 ]
 
 # The "Robinhood board": everything in one watchlist, grouped by sector.
@@ -57,7 +58,8 @@ SECTORS = {
                   "XPEV", "LI", "RKLB", "ASTS", "JOBY", "ACHR"],
     "Industrials": ["BA", "CAT", "GE", "HON", "LMT", "UNP", "UPS",
                     "RTX", "DE", "ETN"],
-    "Telecom & Media": ["T", "VZ", "CMCSA", "WBD", "EA", "TTWO", "CHTR"],
+    "Telecom & Media": ["T", "VZ", "CMCSA", "WBD", "CHTR"],
+    "Gaming": ["TTWO", "EA", "RBLX", "SONY", "NTES"],
     "Airlines & Travel": ["DAL", "UAL", "AAL", "LUV", "JBLU", "MAR",
                           "HLT", "CCL", "RCL", "EXPE", "ALK"],
 }

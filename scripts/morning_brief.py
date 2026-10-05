@@ -7,7 +7,7 @@ check_alerts.py (the scheduled runner consumes these):
   NO_ALERTS      -> ran fine, nothing notable
   TRIGGERED:...  -> briefing lines the runner messages to the user
 
-Contents: top gainers/losers (Core 25), today's earnings, and a 2-3
+Contents: top gainers/losers (Core), today's earnings, and a 2-3
 sentence Gemini brief. Research/watch-only -- not financial advice.
 """
 
