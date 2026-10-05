@@ -37,8 +37,9 @@ from marketpulse.charts import (GF_DEFAULT, GF_RANGE_LABEL, GF_TIMEFRAMES,
                                 INTRADAY_TIMEFRAMES, big_chart_svg,
                                 equal_weight_rebased, gf_chart_svg,
                                 rebase_to_100, timeframe_change)
-from marketpulse.data import FinnhubClient
-from marketpulse.engine import scan_stock, scan_universe, sector_summary
+from marketpulse.data import FinnhubClient, yahoo_simple_quote
+from marketpulse.engine import (breadth_counts, scan_stock, scan_universe,
+                                sector_summary)
 from marketpulse.format import (CCY_SYMBOLS, fmt_change, fmt_price,
                                 fmt_price_ccy, fx_rates_from_strip,
                                 score_band)
@@ -455,6 +456,23 @@ def cached_gf_series(symbol, tf_key):
         async with aiohttp.ClientSession(trust_env=True) as session:
             return await _yahoo_series(session, symbol, rng=rng,
                                        interval=interval)
+    return _run(_go())
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_glance():
+    """S&P / Nasdaq futures snapshot for the at-a-glance strip.
+
+    [(label, change_pct)] via Yahoo, no key. [] when unavailable.
+    """
+    async def _go():
+        out = []
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            for sym, label in (("ES=F", "S&P fut"), ("NQ=F", "Nas fut")):
+                _, chg = await yahoo_simple_quote(session, sym)
+                if chg is not None:
+                    out.append((label, chg))
+        return out
     return _run(_go())
 
 
@@ -1126,6 +1144,23 @@ with tab_stocks:
         st.caption(
             f"Last scan {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')} • "
             f"{len(stock_results)} results • showing top {config.TOP_N}")
+        # At-a-glance: futures + market breadth, first thing on the page.
+        glance_bits = []
+        for label, chg in cached_glance():
+            cls = "up" if chg > 0 else "down" if chg < 0 else "flat"
+            glance_bits.append(
+                f'<span class="bz-gitem">{label} '
+                f'<b class="{cls}">{chg:+.2f}%</b></span>')
+        if stock_results:
+            up, down, _ = breadth_counts(stock_results)
+            glance_bits.append(
+                f'<span class="bz-gitem">Breadth '
+                f'<b class="up">{up}▲</b> '
+                f'<b class="down">{down}▼</b></span>')
+        if glance_bits:
+            smd(
+                f'<div class="bz-glance">{"".join(glance_bits)}</div>',
+            )
         if not stock_results:
             st.warning("The scan came back empty — live quotes aren't "
                        "loading right now. Check Connections in the sidebar; "

@@ -675,6 +675,15 @@ SHARED_CSS = """
 .bz-bench-vs { font-size: 11px; color: #5b6773;
   text-transform: uppercase; letter-spacing: 1px; }
 .bz-bench-tf { margin-left: auto; font-size: 11px; color: #5b6773; }
+
+/* At-a-glance strip: futures + breadth, first thing on the page */
+.bz-glance { display: flex; gap: 18px; flex-wrap: wrap; align-items: center;
+  padding: 2px 2px 12px; font-family: monospace; font-size: 12.5px;
+  color: #8b93a7; }
+.bz-gitem b { font-weight: 700; }
+.bz-gitem b.up { color: var(--up); }
+.bz-gitem b.down { color: var(--down); }
+.bz-gitem b.flat { color: #8b93a7; }
 </style>
 """
 

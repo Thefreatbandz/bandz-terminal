@@ -510,3 +510,21 @@ def unusual_volume_ratio(volumes, lookback=20):
     if avg <= 0:
         return None
     return volumes[-1] / avg
+
+
+async def yahoo_simple_quote(session, symbol):
+    """(price, change_percent) via Yahoo's free chart API, no key.
+
+    Works for anything Yahoo charts serves: stocks, ETFs, futures
+    ("ES=F"), FX. Returns (None, None) when unavailable.
+    """
+    try:
+        q = await FinnhubClient(session)._yahoo_quote(symbol)
+    except Exception:
+        return None, None
+    if not q:
+        return None, None
+    chg = q.get("change_percent")
+    if not isinstance(chg, (int, float)):
+        return None, None
+    return q.get("price"), chg

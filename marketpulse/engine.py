@@ -128,3 +128,17 @@ def sector_summary(results):
     summary = [(s, sum(v) / len(v), len(v)) for s, v in moves.items()]
     summary.sort(key=lambda item: item[1], reverse=True)
     return summary
+
+
+def breadth_counts(results):
+    """(up, down, flat) day-move counts across scan results."""
+    up = down = flat = 0
+    for r in results or []:
+        chg = (r.get("quote") or {}).get("change_percent") or 0
+        if chg > 0:
+            up += 1
+        elif chg < 0:
+            down += 1
+        else:
+            flat += 1
+    return up, down, flat
