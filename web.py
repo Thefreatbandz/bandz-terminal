@@ -509,6 +509,120 @@ def cached_stackz():
     return stackz_mod.fetch_stackz_snapshot()
 
 
+# --- Bot City tab: the paper-trading strategies as a neon city ---
+# LEARN: the full strategy roster is a constant because the snapshot
+# only lists strategies that already have fills — quiet ones still
+# get a gray "standby" tower so the skyline stays complete.
+_BOT_CITY_ROSTER = [
+    "adx_system", "atr_breakout", "bollinger_reversion", "donchian_breakout",
+    "earnings_drift", "ema_cross", "ichimoku", "keltner_breakout", "macd",
+    "news_sentiment", "obv_trend", "parabolic_sar", "rsi2_meanrev",
+    "sma_cross", "stoch_oscillator", "supertrend", "vwap_meanrev",
+    "williams_r",
+]
+_BOT_CITY_GOAL = 100  # Tbandz's gate: 100 paper trades before live money
+
+
+def _short_strategy(name):
+    """Compact tower label: 'bollinger_reversion' -> 'BOLLINGER'."""
+    return (name.replace("_meanrev", "").replace("_system", "")
+                .replace("_oscillator", "").upper()[:8])
+
+
+def bot_city_html(snap):
+    """Build the Bot City page HTML from a Stackz snapshot.
+
+    Towers come from the snapshot's trade list (strategy + realized
+    P&L per close); the canvas renderer is the vendored bot_city.js.
+    Returns None when there's no trade data or the renderer is missing
+    — the tab then shows the honest empty state instead of a guess.
+    """
+    trades = (snap or {}).get("trades") or []
+    if not trades:
+        return None
+    per = {}
+    for t in trades:
+        s = t.get("strategy") or "?"
+        pnl = t.get("realized_pnl") or 0
+        d = per.setdefault(s, {"closed": 0, "pnl": 0.0})
+        # LEARN: a close is a sell side or any line carrying realized P&L.
+        if t.get("side") in ("sell", "close") or pnl != 0:
+            d["closed"] += 1
+            d["pnl"] += pnl
+    towers = []
+    for s in _BOT_CITY_ROSTER:
+        v = per.get(s, {"closed": 0, "pnl": 0.0})
+        if v["closed"] == 0:
+            towers.append({"name": "", "color": "#5a5f6e",
+                           "value": 0, "sub": ""})
+        else:
+            color = ("#3ddc84" if v["pnl"] > 0
+                     else "#ff5f5f" if v["pnl"] < 0 else "#d9a441")
+            sign = "+" if v["pnl"] >= 0 else "-"
+            towers.append({"name": _short_strategy(s), "color": color,
+                           "value": v["closed"],
+                           "sub": f"{sign}${abs(v['pnl']):.2f}"})
+    # LEARN: busiest skyline reads best — most closed trades first.
+    towers.sort(key=lambda t: -t["value"])
+    total_pnl = sum(v["pnl"] for v in per.values())
+    total_closed = sum(v["closed"] for v in per.values())
+    psign = "+" if total_pnl >= 0 else "-"
+    config = {
+        "accent": "#d9a441",
+        "towers": towers,
+        "dome": {
+            "title": "PAPER P&L — NOT REAL MONEY",
+            "shortTitle": "PAPER P&L",
+            "value": f"{psign}${abs(total_pnl):.2f}",
+            "sub": f"{total_closed}/{_BOT_CITY_GOAL} closed · paper",
+        },
+    }
+    js_path = os.path.join(os.path.dirname(__file__),
+                           "marketpulse", "bot_city.js")
+    try:
+        with open(js_path, encoding="utf-8") as f:
+            city_js = f.read()
+    except OSError:
+        return None
+    active = [t for t in towers if t["name"]]
+    legend_rows = "\n".join(
+        f'<div class="lrow"><span class="dot" style="background:{t["color"]}">'
+        f'</span><span class="lname">{html.escape(t["name"])}</span>'
+        f'<span class="lsub">{html.escape(t["sub"])}</span></div>'
+        for t in active)
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{background:#07080b;color:#ece9df;
+font-family:ui-monospace,SFMono-Regular,Menlo,monospace}}
+.hd{{padding:12px 16px;border-bottom:1px solid #1c1f2a;display:flex;
+justify-content:space-between;align-items:center}}
+.hd h1{{font-size:14px;letter-spacing:3px;color:#d9a441}}
+.paper{{font-size:10px;letter-spacing:2px;color:#ff5f5f;
+border:1px solid #ff5f5f;border-radius:4px;padding:4px 8px}}
+#city{{width:100%;height:420px;display:block}}
+.legendwrap{{padding:10px 16px 4px}}
+.lhead{{font-size:10px;letter-spacing:2px;color:#8a8fa3;margin-bottom:6px}}
+.lrow{{display:flex;align-items:center;gap:10px;padding:6px 0;
+border-bottom:1px dashed #1c1f2a;font-size:12px}}
+.dot{{width:9px;height:9px;border-radius:50%;flex:none}}
+.lname{{font-weight:700;letter-spacing:1px}}
+.lsub{{margin-left:auto;color:#8a8fa3;font-size:11px}}
+.ft{{padding:8px 16px;font-size:10px;letter-spacing:2px;color:#8a8fa3;
+border-top:1px solid #1c1f2a;text-align:center}}
+</style></head><body>
+<div class="hd"><h1>⚡ BOT CITY</h1><span class="paper">PAPER ONLY</span></div>
+<canvas id="city"></canvas>
+<div class="legendwrap"><div class="lhead">ACTIVE STRATEGIES · PAPER</div>
+{legend_rows}</div>
+<div class="ft">EACH TOWER IS A STRATEGY · HEIGHT = CLOSED TRADES · PAPER ONLY</div>
+<script>{city_js}</script>
+<script>initCity('city', {json.dumps(config)});</script>
+</body></html>"""
+
+
 @st.cache_data(ttl=120, show_spinner=False)
 def cached_stock_scan(symbol):
     """Scan one symbol (PennyPulse tab)."""
@@ -1099,8 +1213,8 @@ if search_sym and search_sym.strip():
         st.warning(f"No market data for '{sym}' — check the symbol.")
     st.divider()
 
-tab_stocks, tab_news, tab_penny, tab_crypto, tab_stackz, tab_screener = st.tabs(
-    ["Stocks", "News", "Penny", "Crypto", "Stackz", "Screener"])
+tab_stocks, tab_news, tab_penny, tab_crypto, tab_stackz, tab_city, tab_screener = st.tabs(
+    ["Stocks", "News", "Penny", "Crypto", "Stackz", "🏙 Bot City", "Screener"])
 
 # --- shared stock scan (MarketPulse + News tabs) ---
 news_top_n = None
@@ -1548,6 +1662,23 @@ with tab_stackz:
                 f'</div><p>{stackz_time_et(t.get("time"))} · {price} · '
                 f'{strat} · realized {rpnl}</p>'
                 f'<p>{reason}</p></div>')
+
+# --- Bot City ---
+with tab_city:
+    section("", "Bot City — paper strategies as a skyline",
+            "Each tower is a strategy; height is closed trades. "
+            "Paper trading only — no real money.")
+    snap = cached_stackz()
+    if not snap or not stackz_mod.is_fresh(snap):
+        st.caption("Paper-trading sync hasn't landed yet — the city "
+                   "appears after the next Stackz run.")
+    else:
+        city_doc = bot_city_html(snap)
+        if not city_doc:
+            st.caption("No paper trades in this snapshot yet — the city "
+                       "appears after the first closes.")
+        else:
+            st.components.v1.html(city_doc, height=780, scrolling=False)
 
 # --- Screener ---
 with tab_screener:
