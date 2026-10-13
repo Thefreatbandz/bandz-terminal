@@ -1442,13 +1442,20 @@ fx_strip()
 search_sym = st.text_input("Search any ticker", key="bz-search",
                            placeholder="Symbol or company — e.g. NVDA or NVIDIA")
 query = (search_sym or "").strip()
+
+
+def _fill_search(sym):
+    # Runs as the button's on_click callback (before the next script run),
+    # which is the only legal time to set a widget's session state.
+    st.session_state["bz-search"] = sym
+
+
 if query and query.upper() not in config.COMPANY_NAMES:
     # Instant suggestions; tapping one fills the box and runs the lookup.
     # (Streamlit refreshes these when you hit Go/Search on the keyboard.)
     for sug_sym, sug_name in suggest_symbols(query, config.COMPANY_NAMES):
-        if st.button(f"{sug_sym} — {sug_name}", key=f"bz-sug-{sug_sym}"):
-            st.session_state["bz-search"] = sug_sym
-            st.rerun()
+        st.button(f"{sug_sym} — {sug_name}", key=f"bz-sug-{sug_sym}",
+                  on_click=_fill_search, args=(sug_sym,))
 if query:
     sym = query.upper()
     sym = CRYPTO_MAP.get(sym, sym)  # BTC -> BINANCE:BTCUSDT

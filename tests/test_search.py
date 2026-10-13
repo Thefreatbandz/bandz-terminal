@@ -75,3 +75,13 @@ def test_limit_respected():
 def test_no_duplicates():
     out = syms("nvda")
     assert len(out) == len(set(out))
+
+
+def test_suggestion_click_uses_callback():
+    """Regression: tapping a suggestion must not assign widget session
+    state after instantiation (StreamlitWidgetAlreadyInstantiatedError
+    crashed the app). The sanctioned pattern is on_click=_fill_search.
+    """
+    src = open("web.py").read()
+    assert 'st.session_state["bz-search"] = sug_sym' not in src
+    assert "on_click=_fill_search" in src
