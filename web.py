@@ -35,6 +35,7 @@ from marketpulse.ai import (DEGRADED_PREFIX, _gemini_text,
                             generate_watchlist_digest)
 from marketpulse import indicators as ind
 from marketpulse import treemap as tm
+from marketpulse.search import suggest_symbols
 from marketpulse.charts import (GF_DEFAULT, GF_RANGE_LABEL, GF_TIMEFRAMES,
                                 INTRADAY_TIMEFRAMES, big_chart_svg,
                                 candles_svg, equal_weight_rebased,
@@ -1439,9 +1440,17 @@ fx_strip()
 
 # --- ticker search: look up any symbol on demand ---
 search_sym = st.text_input("Search any ticker", key="bz-search",
-                           placeholder="Type a symbol — e.g. NVDA")
-if search_sym and search_sym.strip():
-    sym = search_sym.strip().upper()
+                           placeholder="Symbol or company — e.g. NVDA or NVIDIA")
+query = (search_sym or "").strip()
+if query and query.upper() not in config.COMPANY_NAMES:
+    # Instant suggestions; tapping one fills the box and runs the lookup.
+    # (Streamlit refreshes these when you hit Go/Search on the keyboard.)
+    for sug_sym, sug_name in suggest_symbols(query, config.COMPANY_NAMES):
+        if st.button(f"{sug_sym} — {sug_name}", key=f"bz-sug-{sug_sym}"):
+            st.session_state["bz-search"] = sug_sym
+            st.rerun()
+if query:
+    sym = query.upper()
     sym = CRYPTO_MAP.get(sym, sym)  # BTC -> BINANCE:BTCUSDT
     with st.spinner(f"Looking up {sym}..."):
         hit = cached_stock_scan(sym)
