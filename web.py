@@ -1621,10 +1621,18 @@ with tab_stocks:
         if any(syms for _, syms in week):
             parts = []
             for d, syms in week:
-                chips = "".join(
-                    f'<span class="bz-chip bz-echip">'
-                    f"{html.escape(s)}</span>"
-                    for s in syms)
+                chip_html = []
+                for s in syms:
+                    name = config.COMPANY_NAMES.get(s)
+                    if name:
+                        label = (f'{html.escape(s)} '
+                                 f'<span class="bz-econame">· '
+                                 f'{html.escape(name)}</span>')
+                    else:
+                        label = html.escape(s)
+                    chip_html.append(
+                        f'<span class="bz-chip bz-echip">{label}</span>')
+                chips = "".join(chip_html)
                 if not chips:
                     chips = '<span class="bz-enone">—</span>'
                 parts.append(

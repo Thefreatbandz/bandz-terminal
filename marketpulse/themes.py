@@ -706,6 +706,7 @@ SHARED_CSS = """
   text-transform: uppercase; color: #8b98a5; margin-bottom: 8px; }
 .bz-echips { display: flex; flex-wrap: wrap; gap: 6px; }
 .bz-chip.bz-echip { margin-left: 0; font-size: 11px; padding: 4px 10px; }
+.bz-econame { color: #8b93a7; font-weight: 400; }
 .bz-enone { color: #3d4753; font-size: 12px; }
 </style>
 """
