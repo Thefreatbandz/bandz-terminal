@@ -18,6 +18,19 @@ function initCity(canvasId, config) {
 
   let W = 0, H = 0, horizon = 0, towers = [];
   let domeGeom = { cx: 0, r: 80 };
+  // LEARN: the tap-zoom camera — cam holds the live values, the t*
+  // fields hold the target. Each frame eases live toward target so
+  // the zoom glides instead of snapping. (cx, cy) is the world point
+  // the camera centers on; z = 1 is the full-city view.
+  let cam = { z: 1, cx: 0, cy: 0, tz: 1, tcx: 0, tcy: 0 };
+  let DPR = 1;
+  let selected = -1;   // index into towers of the tapped tower (-1 = none)
+  // LEARN: pulses replay REAL closes — config.pulses carries the
+  // tower index + age in seconds of each close inside the 2h window.
+  // The page is a static snapshot, so these loop until fresher data
+  // lands; the footer only claims them when at least one exists.
+  const pulseList = (config.pulses || []).filter(p =>
+    p && Number.isInteger(p.i) && p.i >= 0);
   // LEARN: background city dressing — generated once in layout().
   let skylineFar = [], skylineNear = [], cars = [], arcs = [];
   let lastArc = 0;
@@ -28,12 +41,17 @@ function initCity(canvasId, config) {
   // Math.max(..., 0.18) guarantees even a zero-value tower
   // still shows as a small "standby" building, never invisible.
   function layout() {
-    const dpr = window.devicePixelRatio || 1;
+    DPR = window.devicePixelRatio || 1;
     W = canvas.clientWidth;
     H = canvas.clientHeight;
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    canvas.width = W * DPR;
+    canvas.height = H * DPR;
+    // LEARN: a relayout means new geometry, so the camera resets to
+    // the full-city view — a zoom target from the old layout would
+    // point at the wrong tower. Same for the selected tower + card.
+    cam = { z: 1, cx: W / 2, cy: H / 2, tz: 1, tcx: W / 2, tcy: H / 2 };
+    selected = -1;
+    hideCard();
     horizon = H * 0.72;
 
     const vals = config.towers.map(t => t.value);
@@ -119,7 +137,10 @@ function initCity(canvasId, config) {
     g.addColorStop(0.7, '#0a1020');
     g.addColorStop(1, '#07080b');
     ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, H);
+    // LEARN: overdrawn 3x — when the tap camera zooms in, the world
+    // shifts under the viewport; a 1:1 background would leave blank
+    // edges. Same trick on the ground and streets below.
+    ctx.fillRect(-W, -H, 3 * W, 3 * H);
     // stars
     ctx.fillStyle = '#fff';
     for (let i = 0; i < 60; i++) {
@@ -171,7 +192,7 @@ function initCity(canvasId, config) {
       ctx.globalAlpha = 0.22;
       ctx.strokeStyle = '#2a3350';
       ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-W, y); ctx.lineTo(2 * W, y); ctx.stroke();
     });
     ctx.globalAlpha = 1;
     cars.forEach(car => {
@@ -216,11 +237,115 @@ function initCity(canvasId, config) {
     });
   }
 
-  function drawGround() {    const g = ctx.createLinearGradient(0, horizon, 0, H);
+  // LEARN: a pulse is a looping light burst for a REAL close — a beam
+  // shooting up from the tower top plus an expanding ring. Fresher
+  // closes (smaller age) burn brighter; the loop is staggered per
+  // tower so the city never flashes in sync like a Christmas tree.
+  function drawPulses(t) {
+    if (stillMode || !pulseList.length) return;
+    pulseList.forEach((p, k) => {
+      const tw = towers[p.i];
+      if (!tw || !tw.name) return;
+      const fresh = Math.max(0, 1 - (p.age || 0) / 7200);  // 2h window
+      const cyc = (t / 1600 + k * 0.61) % 1;                // 0→1 loop
+      const a = (1 - cyc) * (0.3 + 0.7 * fresh);
+      const cxp = tw.x + tw.w / 2, top = tw.y;
+      const beamH = 80 + 70 * fresh;
+      ctx.save();
+      const g = ctx.createLinearGradient(0, top, 0, top - beamH);
+      g.addColorStop(0, tw.color);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.globalAlpha = a * 0.85;
+      ctx.fillStyle = g;
+      ctx.fillRect(cxp - 3, top - beamH, 6, beamH);
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = tw.color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cxp, top - 8, 8 + cyc * 36, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    });
+  }
+
+  // LEARN: tap-to-zoom — the click point is converted from screen px
+  // back to world coords by inverting the camera transform, then
+  // hit-tested against tower boxes (mast included). Tapping the same
+  // tower or empty sky zooms back out and dismisses the card.
+  // The card is built with textContent, never innerHTML, so strategy
+  // data can't inject markup even if a name ever turned hostile.
+  function onTap(e) {
+    const r = canvas.getBoundingClientRect();
+    const sx = e.clientX - r.left, sy = e.clientY - r.top;
+    const wx = (sx - W / 2) / cam.z + cam.cx;
+    const wy = (sy - H / 2) / cam.z + cam.cy;
+    const hit = towers.findIndex(tw =>
+      tw.name && wx >= tw.x - 4 && wx <= tw.x + tw.w + 4 &&
+      wy >= tw.y - 16 && wy <= horizon);
+    if (hit >= 0 && hit !== selected) {
+      selected = hit;
+      const tw = towers[hit];
+      cam.tz = W < 500 ? 2.3 : 1.9;   // phones get a tighter zoom
+      cam.tcx = tw.x + tw.w / 2;
+      cam.tcy = tw.y + tw.h * 0.3;
+      showCard(tw);
+    } else {
+      selected = -1;
+      cam.tz = 1; cam.tcx = W / 2; cam.tcy = H / 2;
+      hideCard();
+    }
+  }
+
+  function showCard(tw) {
+    const s = tw.stats;
+    const card = document.getElementById('tcard');
+    const title = document.getElementById('ttitle');
+    const stats = document.getElementById('tstats');
+    const recent = document.getElementById('trecent');
+    if (!card || !title || !stats || !recent || !s) return;
+    const up = s.pnl >= 0;
+    const money = v => (v >= 0 ? '+' : '\u2212') + '$' + Math.abs(v).toFixed(2);
+    title.textContent = tw.name + '  ' + money(s.pnl);
+    title.className = up ? 'up' : 'dn';
+    stats.textContent = '';
+    const winRate = s.closed ? Math.round(100 * s.wins / s.closed) : 0;
+    [['CLOSED', String(s.closed)],
+     ['WIN RATE', winRate + '%'],
+     ['NET', money(s.pnl)]].forEach(([k, v]) => {
+      const d = document.createElement('div');
+      const b = document.createElement('b');
+      b.textContent = v;
+      d.appendChild(b);
+      d.appendChild(document.createTextNode(k));
+      stats.appendChild(d);
+    });
+    recent.textContent = '';
+    (s.recent || []).forEach(rr => {
+      const row = document.createElement('div');
+      row.className = 'rrow';
+      const l = document.createElement('span');
+      l.textContent = (rr.s || '?') + ' \u00B7 ' + (rr.t || '');
+      const pv = document.createElement('span');
+      pv.textContent = money(rr.p || 0);
+      pv.className = (rr.p || 0) >= 0 ? 'up' : 'dn';
+      row.appendChild(l);
+      row.appendChild(pv);
+      recent.appendChild(row);
+    });
+    card.classList.add('show');
+  }
+
+  function hideCard() {
+    const card = document.getElementById('tcard');
+    if (card) card.classList.remove('show');
+  }
+
+  function drawGround() {
+    const g = ctx.createLinearGradient(0, horizon, 0, H);
     g.addColorStop(0, '#0b1220');
     g.addColorStop(1, '#04050a');
     ctx.fillStyle = g;
-    ctx.fillRect(0, horizon, W, H - horizon);
+    ctx.fillRect(-W, horizon, 3 * W, 2 * H);
     // neon horizon line
     ctx.save();
     ctx.shadowColor = config.accent || '#4da3ff';
@@ -416,7 +541,24 @@ function initCity(canvasId, config) {
   }
 
   function frame(t) {
+    // LEARN: ease the camera every frame — 0.14 closes ~86% of the
+    // gap per 10 frames, which reads as a smooth glide, not a snap.
+    // Reduced-motion users get k=1: the zoom still works, it just
+    // lands instantly with no animation.
+    const k = stillMode ? 1 : 0.14;
+    cam.z += (cam.tz - cam.z) * k;
+    cam.cx += (cam.tcx - cam.cx) * k;
+    cam.cy += (cam.tcy - cam.cy) * k;
+    if (Math.abs(cam.tz - cam.z) < 0.002) cam.z = cam.tz;
     if (!document.hidden) {
+      // LEARN: the camera transform — shift the world so the focus
+      // point (cam.cx, cam.cy) sits at screen center, scaled by cam.z.
+      // Every draw call below shares this ctx, so the whole city
+      // zooms as one piece. Reset each frame so easing never compounds.
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      ctx.translate(W / 2, H / 2);
+      ctx.scale(cam.z, cam.z);
+      ctx.translate(-cam.cx, -cam.cy);
       drawSky(t);
       drawMoon();
       drawSkyline();
@@ -428,6 +570,7 @@ function initCity(canvasId, config) {
       towers.filter(tw => !tw.backRow).forEach(tw => drawTower(tw, t));
       drawDome(t);
       drawArcs(t);
+      drawPulses(t);
       drawParticles();
     }
     if (!stillMode) requestAnimationFrame(frame);
@@ -438,5 +581,16 @@ function initCity(canvasId, config) {
   // LEARN: redraw the layout when the window changes size so the
   // skyline always fits — same resize lesson as station.js.
   window.addEventListener('resize', () => { layout(); });
+  canvas.addEventListener('click', onTap);
+  // LEARN: the close button lives in the HTML overlay (not the
+  // canvas), so its click never reaches onTap — no stopPropagation
+  // juggling needed, but resetting the camera here keeps one code
+  // path for "dismiss".
+  const tclose = document.getElementById('tclose');
+  if (tclose) tclose.addEventListener('click', () => {
+    selected = -1;
+    cam.tz = 1; cam.tcx = W / 2; cam.tcy = H / 2;
+    hideCard();
+  });
   if (!stillMode) requestAnimationFrame(frame);
 }
