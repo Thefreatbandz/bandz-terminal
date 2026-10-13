@@ -528,3 +528,317 @@ async def yahoo_simple_quote(session, symbol):
     if not isinstance(chg, (int, float)):
         return None, None
     return q.get("price"), chg
+
+
+# ---------------------------------------------------------------------------
+# OpenTerminal-gap data sources (all free, no keys).
+# Treemap/scan approach adapted from OpenTerminal (MIT).
+# ---------------------------------------------------------------------------
+
+TV_SCAN_URL = "https://scanner.tradingview.com/america/scan"
+
+#: Columns requested from the TradingView scanner, in order. The response
+#: rows arrive as {"s": "NASDAQ:AAPL", "d": [description, close, change,
+#: market_cap_basic, sector]} aligned to this list.
+TV_SCAN_COLUMNS = ["description", "close", "change", "market_cap_basic",
+                   "sector"]
+
+
+def tv_scan_body(limit=400):
+    """POST body for the TradingView scanner: top `limit` US names by
+    market cap. Pure function so the request shape is unit-testable."""
+    return {
+        "symbols": {"query": {"types": []}, "tickers": []},
+        "columns": list(TV_SCAN_COLUMNS),
+        "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
+        "options": {"lang": "en"},
+        "range": [0, limit],
+    }
+
+
+def parse_tv_scan(payload):
+    """Rows from a TradingView scanner payload ->
+    [{"symbol","name","price","change","mcap","sector"}].
+
+    Pure function. Skips rows with missing/zero market cap or a missing
+    change value. Never raises.
+    """
+    out = []
+    try:
+        rows = payload.get("data") or []
+    except AttributeError:
+        return []
+    for row in rows:
+        try:
+            sym = (row.get("s") or "").split(":")[-1].upper()
+            d = row.get("d") or []
+            name = d[0] if len(d) > 0 else ""
+            price = d[1] if len(d) > 1 else None
+            change = d[2] if len(d) > 2 else None
+            mcap = d[3] if len(d) > 3 else None
+            sector = d[4] if len(d) > 4 else "Other"
+        except (AttributeError, IndexError, TypeError):
+            continue
+        if not sym or not mcap or not isinstance(mcap, (int, float)):
+            continue
+        if not isinstance(change, (int, float)):
+            continue
+        if not isinstance(price, (int, float)):
+            price = 0.0
+        out.append({
+            "symbol": sym,
+            "name": str(name or sym),
+            "price": float(price),
+            "change": float(change),
+            "mcap": float(mcap),
+            "sector": str(sector or "Other"),
+        })
+    return out
+
+
+async def tv_heatmap_scan(session, limit=400):
+    """Top `limit` US stocks by market cap via TradingView's free
+    scanner (no key) -> [{"symbol","name","price","change","mcap",
+    "sector"}]. [] when unavailable. Never raises."""
+    try:
+        async with session.post(
+            TV_SCAN_URL,
+            json=tv_scan_body(limit),
+            headers={"User-Agent": "Mozilla/5.0",
+                     "Accept-Encoding": "gzip, deflate"},
+            timeout=aiohttp.ClientTimeout(total=20),
+        ) as resp:
+            if resp.status != 200:
+                return []
+            payload = await resp.json()
+        return parse_tv_scan(payload)
+    except Exception:
+        return []
+
+
+def parse_yahoo_ohlc(payload):
+    """OHLCV candles (oldest -> newest) from a Yahoo chart payload.
+
+    Returns [{"t": epoch, "o":..,"h":..,"l":..,"c":..,"v":..}].
+    Candles with any null OHLC leg are skipped. Pure / testable.
+    """
+    out = []
+    try:
+        result = (payload.get("chart", {}).get("result") or [None])[0]
+        if not result:
+            return []
+        quote = (result.get("indicators", {}).get("quote") or [{}])[0]
+        opens = quote.get("open") or []
+        highs = quote.get("high") or []
+        lows = quote.get("low") or []
+        closes = quote.get("close") or []
+        vols = quote.get("volume") or []
+        stamps = result.get("timestamp") or []
+    except (AttributeError, TypeError):
+        return []
+    n = min(len(opens), len(highs), len(lows), len(closes))
+    for i in range(n):
+        o, h, l, c = opens[i], highs[i], lows[i], closes[i]
+        if not all(isinstance(v, (int, float)) for v in (o, h, l, c)):
+            continue
+        v = vols[i] if i < len(vols) and isinstance(vols[i],
+                                                    (int, float)) else 0
+        t = stamps[i] if i < len(stamps) else None
+        out.append({"t": t, "o": float(o), "h": float(h),
+                    "l": float(l), "c": float(c), "v": float(v)})
+    return out
+
+
+async def yahoo_ohlc(session, symbol, range_="6mo", interval="1d"):
+    """OHLCV candles via Yahoo's free chart API (no key).
+
+    range_/interval follow Yahoo's chart params, e.g. ("1d","5m").
+    Returns oldest -> newest list of dicts. [] when unavailable.
+    Never raises.
+    """
+    ysym = FinnhubClient._yahoo_symbol(symbol)
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ysym}"
+    try:
+        async with session.get(
+            url,
+            params={"interval": interval, "range": range_},
+            headers={"User-Agent": "Mozilla/5.0",
+                     "Accept-Encoding": "gzip, deflate"},
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            if resp.status != 200:
+                return []
+            payload = await resp.json()
+        return parse_yahoo_ohlc(payload)
+    except Exception:
+        return []
+
+
+CG_IDS = ["bitcoin", "ethereum", "solana", "dogecoin", "cardano",
+          "ripple", "chainlink", "avalanche-2"]
+
+
+def parse_coingecko_board(payload):
+    """CoinGecko /coins/markets rows ->
+    [{"id","symbol","price","change_24h","spark7":[..]}].
+
+    Pure function. spark7 is [] when the payload has no sparkline.
+    Never raises.
+    """
+    out = []
+    if not isinstance(payload, list):
+        return []
+    for row in payload:
+        if not isinstance(row, dict):
+            continue
+        try:
+            spark = (row.get("sparkline_in_7d") or {}).get("price") or []
+            spark7 = [float(p) for p in spark
+                      if isinstance(p, (int, float))]
+            price = row.get("current_price")
+            chg = row.get("price_change_percentage_24h")
+            out.append({
+                "id": row.get("id") or "",
+                "symbol": str(row.get("symbol") or "").upper(),
+                "price": float(price) if isinstance(price,
+                                                    (int, float)) else 0.0,
+                "change_24h": float(chg) if isinstance(chg,
+                                                       (int, float)) else 0.0,
+                "spark7": spark7,
+            })
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+async def coingecko_board(session, ids=None):
+    """Top crypto snapshot with 7-day sparklines via CoinGecko's free
+    /coins/markets (no key). Single call — the caller caches it.
+    [] when unavailable. Never raises."""
+    ids = ids or CG_IDS
+    try:
+        async with session.get(
+            "https://api.coingecko.com/api/v3/coins/markets",
+            params={"vs_currency": "usd",
+                    "ids": ",".join(ids),
+                    "sparkline": "true",
+                    "price_change_percentage": "24h"},
+            headers={"User-Agent": "Mozilla/5.0",
+                     "Accept-Encoding": "gzip, deflate"},
+            timeout=aiohttp.ClientTimeout(total=20),
+        ) as resp:
+            if resp.status != 200:
+                return []
+            payload = await resp.json()
+        return parse_coingecko_board(payload)
+    except Exception:
+        return []
+
+
+async def coingecko_dominance(session):
+    """{"btc": pct, "eth": pct} market-cap dominance via CoinGecko's
+    free /global (no key). None when unavailable. Never raises."""
+    try:
+        async with session.get(
+            "https://api.coingecko.com/api/v3/global",
+            headers={"User-Agent": "Mozilla/5.0",
+                     "Accept-Encoding": "gzip, deflate"},
+            timeout=aiohttp.ClientTimeout(total=20),
+        ) as resp:
+            if resp.status != 200:
+                return None
+            payload = await resp.json()
+        pct = (payload.get("data") or {}).get("market_cap_percentage") or {}
+        btc, eth = pct.get("btc"), pct.get("eth")
+        if not isinstance(btc, (int, float)):
+            return None
+        return {"btc": float(btc),
+                "eth": float(eth) if isinstance(eth, (int, float)) else 0.0}
+    except Exception:
+        return None
+
+
+def parse_stooq_csv(text):
+    """Stooq CSV quote list -> {"vix","vix_chg","yield10"}.
+
+    vix_chg is (close-open)/open*100 — Stooq's lightweight quote only
+    carries the latest bar, so this is a day-change proxy, not a true
+    previous-close change. Pure function. Returns {} when unusable.
+    """
+    out = {}
+    if not text or not isinstance(text, str):
+        return out
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return out
+    header = [h.strip().lower() for h in lines[0].split(",")]
+    try:
+        si = header.index("symbol")
+        oi = header.index("open")
+        ci = header.index("close")
+    except ValueError:
+        return out
+    for ln in lines[1:]:
+        parts = ln.split(",")
+        if len(parts) <= max(si, oi, ci):
+            continue
+        sym = parts[si].strip().upper()
+        try:
+            o = float(parts[oi])
+            c = float(parts[ci])
+        except (TypeError, ValueError):
+            continue
+        if sym == "^VIX":
+            out["vix"] = c
+            out["vix_chg"] = ((c - o) / o * 100) if o else 0.0
+        elif sym == "10USY.B":
+            out["yield10"] = c
+    return out
+
+
+async def yahoo_macro(session):
+    """VIX + 10Y Treasury yield via Yahoo's free chart API (no key).
+
+    ^VIX = CBOE Volatility Index; ^TNX = 10-year Treasury yield in
+    percent (Yahoo quotes it directly, e.g. 5.24 = 5.24%).
+    Returns {"vix","vix_chg","yield10","yield10_chg"} (keys missing
+    when a leg fails) or {} when unavailable. Never raises.
+    """
+    out = {}
+    try:
+        vix, vix_chg = await yahoo_simple_quote(session, "^VIX")
+        tnx, tnx_chg = await yahoo_simple_quote(session, "^TNX")
+    except Exception:
+        return {}
+    if isinstance(vix, (int, float)):
+        out["vix"] = float(vix)
+        out["vix_chg"] = float(vix_chg) if isinstance(vix_chg,
+                                                     (int, float)) else 0.0
+    if isinstance(tnx, (int, float)):
+        out["yield10"] = float(tnx)
+        out["yield10_chg"] = float(tnx_chg) if isinstance(tnx_chg,
+                                                          (int, float)) else 0.0
+    return out
+
+
+async def stooq_macro(session):
+    """VIX + 10Y Treasury yield via Stooq's free CSV quotes (no key).
+
+    Returns {"vix","vix_chg","yield10"} (keys may be missing) or {}
+    when unavailable. Never raises.
+    """
+    try:
+        async with session.get(
+            "https://stooq.com/q/l/",
+            params={"s": "^vix,10usy.b", "f": "sd2t2ohlcv",
+                    "h": "", "e": "csv"},
+            headers={"User-Agent": "Mozilla/5.0",
+                     "Accept-Encoding": "gzip, deflate"},
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            if resp.status != 200:
+                return {}
+            text = await resp.text()
+        return parse_stooq_csv(text)
+    except Exception:
+        return {}

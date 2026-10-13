@@ -355,3 +355,253 @@ def equal_weight_rebased(lists):
     n = min(len(r) for r in rbs)
     rbs = [r[-n:] for r in rbs]
     return [sum(v) / len(v) for v in zip(*rbs)]
+
+
+#: Overlay line colors for the candlestick chart (muted, blotter-style).
+CANDLE_OVERLAY_COLORS = {
+    "sma20": "#e5c07b",
+    "ema20": "#7aa2f7",
+    "bb_upper": "#8b93a7",
+    "bb_lower": "#8b93a7",
+}
+
+#: Subpanel order and fixed heights for the candlestick chart.
+CANDLE_SUBPANELS = ("rsi", "macd")
+_CANDLE_SUB_H = 64
+_CANDLE_GAP = 10
+
+
+def _candle_line(vals, x_of, y_of, color, width=1.5, dashed=False):
+    """SVG polyline for a None-padded overlay series."""
+    pts = []
+    for i, v in enumerate(vals):
+        if v is None:
+            continue
+        pts.append(f"{x_of(i):.1f},{y_of(v):.1f}")
+    if len(pts) < 2:
+        return ""
+    dash = ' stroke-dasharray="4 3"' if dashed else ""
+    return (f'<polyline points="{" ".join(pts)}" fill="none" '
+            f'stroke="{color}" stroke-width="{width}"{dash}/>')
+
+
+def candles_svg(ohlc, overlays=None, subpanels=(), height=260):
+    """Candlestick chart with volume bars, indicator overlays, and
+    optional RSI / MACD subpanels. Returns "" for bad input.
+
+    ohlc: [{"o","h","l","c","v"(,"t")}], oldest -> newest.
+    overlays: {"sma20": [...], "ema20": [...], "bb_upper": [...],
+              "bb_lower": [...], "rsi": [...], "macd_line": [...],
+              "macd_signal": [...], "macd_hist": [...]} — None-padded
+              lists aligned to ohlc.
+    subpanels: subset of ("rsi", "macd"); each adds a fixed-height
+              strip below the price panel.
+    height: price-panel height in px; the SVG grows with subpanels.
+    """
+    ohlc = [c for c in (ohlc or [])
+            if all(isinstance(c.get(k), (int, float))
+                   for k in ("o", "h", "l", "c"))]
+    if len(ohlc) < 2:
+        return ""
+    ohlc = ohlc[-250:]
+    n = len(ohlc)
+    overlays = overlays or {}
+    subs = [s for s in subpanels if s in CANDLE_SUBPANELS]
+
+    def _slice(vals):
+        vals = list(vals or [])
+        return vals[-n:] if len(vals) >= n else [None] * (n - len(vals)) + vals
+
+    ov = {k: _slice(v) for k, v in overlays.items()}
+
+    w = 680
+    pad_l, pad_r, top = 46, 8, 8
+    price_h = height
+    vol_top = top + (price_h - top) * 0.80  # volume bars live at the base
+    sub_h = _CANDLE_SUB_H
+    total_h = price_h + sum(sub_h + _CANDLE_GAP for _ in subs)
+
+    lows = [c["l"] for c in ohlc]
+    highs = [c["h"] for c in ohlc]
+    lo, hi = min(lows), max(highs)
+    for key in ("sma20", "ema20", "bb_upper", "bb_lower"):
+        for v in ov.get(key) or []:
+            if isinstance(v, (int, float)):
+                lo, hi = min(lo, v), max(hi, v)
+    rng = (hi - lo) or 1.0
+
+    def _x(i):
+        return pad_l + (i + 0.5) / n * (w - pad_l - pad_r)
+
+    def _y(p):
+        return top + (1 - (p - lo) / rng) * (vol_top - top)
+
+    slot = (w - pad_l - pad_r) / n
+    body_w = max(2.0, slot * 0.55)
+
+    parts = []
+    # volume bars (faded, at the base of the price panel)
+    vmax = max([c.get("v") or 0 for c in ohlc] + [0]) or 1.0
+    for i, c in enumerate(ohlc):
+        v = c.get("v") or 0
+        vh = (v / vmax) * (price_h - vol_top)
+        if vh <= 0:
+            continue
+        color = GF_UP if c["c"] >= c["o"] else GF_DOWN
+        x = _x(i) - body_w / 2
+        parts.append(
+            f'<rect x="{x:.1f}" y="{price_h - vh:.1f}" '
+            f'width="{body_w:.1f}" height="{vh:.1f}" fill="{color}" '
+            f'fill-opacity="0.30"/>'
+        )
+    # candles
+    for i, c in enumerate(ohlc):
+        up = c["c"] >= c["o"]
+        color = GF_UP if up else GF_DOWN
+        x = _x(i)
+        parts.append(
+            f'<line x1="{x:.1f}" y1="{_y(c["h"]):.1f}" x2="{x:.1f}" '
+            f'y2="{_y(c["l"]):.1f}" stroke="{color}" stroke-width="1"/>'
+        )
+        y_o, y_c = _y(c["o"]), _y(c["c"])
+        y_top, y_bot = min(y_o, y_c), max(y_o, y_c)
+        if abs(c["c"] - c["o"]) < rng * 1e-9:
+            parts.append(
+                f'<line x1="{x - body_w / 2:.1f}" y1="{y_o:.1f}" '
+                f'x2="{x + body_w / 2:.1f}" y2="{y_o:.1f}" '
+                f'stroke="#8b93a7" stroke-width="1.5"/>'
+            )
+        else:
+            parts.append(
+                f'<rect x="{x - body_w / 2:.1f}" y="{y_top:.1f}" '
+                f'width="{body_w:.1f}" height="{max(1.0, y_bot - y_top):.1f}" '
+                f'fill="{color}"/>'
+            )
+    # overlays
+    for key in ("sma20", "ema20"):
+        if ov.get(key):
+            parts.append(_candle_line(ov[key], _x, _y,
+                                      CANDLE_OVERLAY_COLORS[key]))
+    for key in ("bb_upper", "bb_lower"):
+        if ov.get(key):
+            parts.append(_candle_line(ov[key], _x, _y,
+                                      CANDLE_OVERLAY_COLORS[key],
+                                      dashed=True))
+
+    # price axis labels (4)
+    for k in range(4):
+        v = lo + rng * k / 3
+        y = _y(v)
+        parts.append(
+            f'<line x1="{pad_l}" y1="{y:.1f}" x2="{w - pad_r}" '
+            f'y2="{y:.1f}" stroke="#232b40" stroke-width="1"/>'
+            f'<text x="{pad_l - 5}" y="{y + 3.5:.1f}" text-anchor="end" '
+            f'fill="#8b93a7" font-size="10" font-family="monospace">'
+            f'{v:,.2f}</text>'
+        )
+
+    # x-axis date/time labels
+    stamps = [c.get("t") for c in ohlc]
+    if any(isinstance(t, (int, float)) for t in stamps):
+        intraday = (max(s for s in stamps if s)
+                    - min(s for s in stamps if s)) < 2 * 86400
+        tick_fn = _time_label if intraday else _tick_label
+        k = min(4, n)
+        idxs = sorted({round(i * (n - 1) / (k - 1)) for i in range(k)}
+                      ) if k > 1 else [0]
+        for i in idxs:
+            lab = tick_fn(stamps[i])
+            if not lab:
+                continue
+            parts.append(
+                f'<text x="{_x(i):.1f}" y="{price_h - 2}" '
+                f'text-anchor="middle" fill="#8b93a7" font-size="10" '
+                f'font-family="monospace">{lab}</text>'
+            )
+
+    # subpanels
+    y0 = price_h + _CANDLE_GAP
+    legend_bits = []
+    for key in ("sma20", "ema20", "bb_upper"):
+        if ov.get(key) and any(v is not None for v in ov[key]):
+            label = {"sma20": "SMA20", "ema20": "EMA20",
+                     "bb_upper": "BB20"}[key]
+            legend_bits.append(
+                f'<tspan fill="{CANDLE_OVERLAY_COLORS[key]}">{label}</tspan>')
+    for s in subs:
+        if s == "rsi":
+            vals = [v for v in (ov.get("rsi") or [])
+                    if isinstance(v, (int, float))]
+            if vals:
+                def _ry(v):
+                    return y0 + (1 - v / 100.0) * sub_h
+                for guide in (70, 30):
+                    gy = _ry(guide)
+                    parts.append(
+                        f'<line x1="{pad_l}" y1="{gy:.1f}" x2="{w - pad_r}" '
+                        f'y2="{gy:.1f}" stroke="#2a3350" '
+                        f'stroke-dasharray="4 4" stroke-width="1"/>')
+                parts.append(_candle_line(ov["rsi"], _x, _ry, "#8b93a7"))
+                parts.append(
+                    f'<text x="{w - pad_r}" y="{y0 + 12}" text-anchor="end" '
+                    f'fill="#8b93a7" font-size="10" font-family="monospace">'
+                    f'RSI {vals[-1]:.1f}</text>')
+                legend_bits.append('<tspan fill="#8b93a7">RSI</tspan>')
+        elif s == "macd":
+            m = [v for v in (ov.get("macd_line") or [])
+                 if isinstance(v, (int, float))]
+            sg = [v for v in (ov.get("macd_signal") or [])
+                  if isinstance(v, (int, float))]
+            hs = [v for v in (ov.get("macd_hist") or [])
+                  if isinstance(v, (int, float))]
+            if m or sg or hs:
+                span = (m + sg + hs) or [0]
+                mn2, mx2 = min(span), max(span)
+                rg2 = (mx2 - mn2) or 1.0
+
+                def _my(v):
+                    return y0 + (1 - (v - mn2) / rg2) * sub_h
+
+                zero = _my(0)
+                parts.append(
+                    f'<line x1="{pad_l}" y1="{zero:.1f}" x2="{w - pad_r}" '
+                    f'y2="{zero:.1f}" stroke="#2a3350" stroke-width="1"/>')
+                hist = ov.get("macd_hist") or []
+                for i, hv in enumerate(hist):
+                    if not isinstance(hv, (int, float)):
+                        continue
+                    yh = _my(hv)
+                    color = GF_UP if hv >= 0 else GF_DOWN
+                    parts.append(
+                        f'<rect x="{_x(i) - body_w / 2:.1f}" '
+                        f'y="{min(yh, zero):.1f}" width="{body_w:.1f}" '
+                        f'height="{max(1.0, abs(yh - zero)):.1f}" '
+                        f'fill="{color}" fill-opacity="0.55"/>')
+                parts.append(_candle_line(ov.get("macd_line"), _x, _my,
+                                          "#e5c07b"))
+                parts.append(_candle_line(ov.get("macd_signal"), _x, _my,
+                                          "#7aa2f7"))
+                legend_bits.append(
+                    '<tspan fill="#e5c07b">MACD</tspan>')
+        # subpanel frame + label
+        parts.append(
+            f'<rect x="{pad_l}" y="{y0}" width="{w - pad_l - pad_r}" '
+            f'height="{sub_h}" fill="none" stroke="#1b2130" '
+            f'stroke-width="1"/>'
+            f'<text x="{pad_l + 4}" y="{y0 + 12}" fill="#5b6773" '
+            f'font-size="10" font-family="monospace">'
+            f'{s.upper()}</text>')
+        y0 += sub_h + _CANDLE_GAP
+
+    legend = ""
+    if legend_bits:
+        legend = (
+            f'<text x="{pad_l}" y="16" font-size="11" '
+            f'font-family="monospace">'
+            + '<tspan dx="0"> </tspan>'.join(legend_bits) + '</text>')
+
+    return (
+        f'<svg width="100%" viewBox="0 0 {w} {total_h}" '
+        f'style="display:block">'
+        f'{"".join(parts)}{legend}</svg>'
+    )

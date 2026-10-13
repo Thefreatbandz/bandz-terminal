@@ -684,6 +684,18 @@ SHARED_CSS = """
 .bz-gitem b.up { color: var(--up); }
 .bz-gitem b.down { color: var(--down); }
 .bz-gitem b.flat { color: #8b93a7; }
+
+/* Market-cap treemap (TradingView scan): tiles sized by mcap,
+   colored by day change. Absolutely positioned inside .tm. */
+.tm { position: relative; width: 100%; height: 240px; border-radius: 8px;
+  overflow: hidden; margin: 6px 0 4px 0; background: #0c1015; }
+.tmt { position: absolute; overflow: hidden; box-sizing: border-box;
+  border: 1px solid rgba(0,0,0,0.45); padding: 3px 4px;
+  font-family: monospace; line-height: 1.25; }
+.tmt b { display: block; font-size: 11px; color: #e6edf3; font-weight: 700; }
+.tmt span { font-size: 10px; color: #e6edf3; opacity: 0.85; }
+.bz-tm-note { font-size: 11px; color: #5b6773; font-family: monospace;
+  margin: 2px 0 4px 2px; }
 </style>
 """
 

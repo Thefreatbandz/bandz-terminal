@@ -33,11 +33,16 @@ from marketpulse.ai import (DEGRADED_PREFIX, _gemini_text,
                             generate_ai_analysis, generate_market_brief,
                             generate_mover_explanation,
                             generate_watchlist_digest)
+from marketpulse import indicators as ind
+from marketpulse import treemap as tm
 from marketpulse.charts import (GF_DEFAULT, GF_RANGE_LABEL, GF_TIMEFRAMES,
                                 INTRADAY_TIMEFRAMES, big_chart_svg,
-                                equal_weight_rebased, gf_chart_svg,
-                                rebase_to_100, timeframe_change)
-from marketpulse.data import FinnhubClient, yahoo_simple_quote
+                                candles_svg, equal_weight_rebased,
+                                gf_chart_svg, rebase_to_100,
+                                timeframe_change)
+from marketpulse.data import (FinnhubClient, coingecko_board,
+                              coingecko_dominance, tv_heatmap_scan,
+                              yahoo_macro, yahoo_ohlc, yahoo_simple_quote)
 from marketpulse.engine import (breadth_counts, scan_stock, scan_universe,
                                 sector_summary)
 from marketpulse.format import (CCY_SYMBOLS, fmt_change, fmt_price,
@@ -363,7 +368,72 @@ def sector_board(summary):
 
 
 def heatmap(results):
-    """Sector-grouped heatmap: every symbol a tile, colored by % change."""
+    """Market-cap-weighted treemap (TradingView's free scanner).
+
+    Tiles sized by market cap, colored by day change, grouped by
+    sector. Falls back to the equal-tile board when the scan is down.
+    """
+    tv = cached_tv_heatmap()
+    if tv:
+        parts = []
+        for sector, tiles in tv:
+            tds = []
+            for t in tiles:
+                chg = t["change"]
+                if t["w"] > 90 and t["h"] > 90:
+                    label = (f"<b>{html.escape(t['symbol'])}</b>"
+                             f"<span>{chg:+.2f}%</span>")
+                elif t["w"] > 45:
+                    label = f"<b>{html.escape(t['symbol'])}</b>"
+                else:
+                    label = ""
+                tds.append(
+                    f'<div class="tmt" '
+                    f'style="left:{t["x"] / 10:.2f}%;'
+                    f'top:{t["y"] / 10:.2f}%;'
+                    f'width:{t["w"] / 10:.2f}%;'
+                    f'height:{t["h"] / 10:.2f}%;'
+                    f'background:{heat_color(chg)}">{label}</div>')
+            parts.append(
+                f'<div class="heat-label">{html.escape(sector)}</div>'
+                f'<div class="tm">{"".join(tds)}</div>')
+        smd(
+            '<div class="bz-tm-note">Top 400 US stocks by market cap · '
+            "tile size = market cap · color = day change</div>"
+            + "".join(parts),
+        )
+        return
+    _heatmap_tiles(results)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def cached_tv_heatmap():
+    """[(sector, treemap tiles)] for the top 400 US names by market cap.
+
+    Tiles carry symbol/name/change/mcap plus x,y,w,h in 0..1000 space
+    from marketpulse.treemap (squarified). None when the TradingView
+    scan is unavailable — heatmap() then falls back to equal tiles.
+    """
+    async def _go():
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            return await tv_heatmap_scan(session, limit=400)
+    rows = _run(_go())
+    if not rows:
+        return None
+    by_sector = {}
+    for r in rows:
+        by_sector.setdefault(r["sector"], []).append(r)
+    out = []
+    for sector in sorted(by_sector):
+        tiles = tm.layout([{"weight": r["mcap"], **r}
+                           for r in by_sector[sector]])
+        if tiles:
+            out.append((sector, tiles))
+    return out or None
+
+
+def _heatmap_tiles(results):
+    """Equal-tile fallback: the original sector-grouped heatmap."""
     by_sector = {}
     for r in results:
         by_sector.setdefault(r.get("sector", "Other"), []).append(r)
@@ -459,6 +529,85 @@ def cached_gf_series(symbol, tf_key):
     return _run(_go())
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def cached_ohlc(symbol, tf_key):
+    """OHLCV candles for the detail panel's candle view (GF timeframes).
+
+    Yahoo's free chart API, no key. [] when unavailable.
+    """
+    rng, interval = GF_TIMEFRAMES.get(tf_key,
+                                      GF_TIMEFRAMES[GF_DEFAULT])
+    async def _go():
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            return await yahoo_ohlc(session, symbol, range_=rng,
+                                    interval=interval)
+    return _run(_go())
+
+
+def _candle_indicators(ohlc, selected):
+    """(overlays, subpanels) for candles_svg from indicator names.
+
+    selected: subset of {"SMA20","EMA20","BB","RSI","MACD"}.
+    """
+    closes = [c["c"] for c in ohlc]
+    overlays, subs = {}, []
+    if "SMA20" in selected:
+        overlays["sma20"] = ind.sma(closes, 20)
+    if "EMA20" in selected:
+        overlays["ema20"] = ind.ema(closes, 20)
+    if "BB" in selected:
+        _, upper, lower = ind.bollinger(closes, 20, 2)
+        overlays["bb_upper"] = upper
+        overlays["bb_lower"] = lower
+    if "RSI" in selected:
+        overlays["rsi"] = ind.rsi(closes, 14)
+        subs.append("rsi")
+    if "MACD" in selected:
+        ml, sl, hs = ind.macd(closes)
+        overlays["macd_line"] = ml
+        overlays["macd_signal"] = sl
+        overlays["macd_hist"] = hs
+        subs.append("macd")
+    return overlays, tuple(subs)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def cached_cg_board():
+    """CoinGecko top-crypto snapshot with 7-day sparklines (no key).
+
+    One call, cached 10 min to respect the free rate limit.
+    [] when unavailable.
+    """
+    async def _go():
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            return await coingecko_board(session)
+    return _run(_go())
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def cached_cg_dominance():
+    """BTC/ETH market-cap dominance via CoinGecko's free /global.
+
+    None when unavailable.
+    """
+    async def _go():
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            return await coingecko_dominance(session)
+    return _run(_go())
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_macro():
+    """VIX + 10Y Treasury yield via Yahoo's free chart API (no key).
+
+    {} when unavailable.
+    """
+    async def _go():
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            return await yahoo_macro(session)
+    return _run(_go())
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_glance():
     """S&P / Nasdaq futures snapshot for the at-a-glance strip.
@@ -540,36 +689,75 @@ def bot_city_html(snap):
     trades = (snap or {}).get("trades") or []
     if not trades:
         return None
+    now = datetime.now(timezone.utc)
     per = {}
     for t in trades:
         s = t.get("strategy") or "?"
         pnl = t.get("realized_pnl") or 0
-        d = per.setdefault(s, {"closed": 0, "pnl": 0.0})
+        d = per.setdefault(s, {"closed": 0, "wins": 0, "pnl": 0.0,
+                               "recent": [], "freshest": None})
         # LEARN: a close is a sell side or any line carrying realized P&L.
         if t.get("side") in ("sell", "close") or pnl != 0:
             d["closed"] += 1
             d["pnl"] += pnl
+            if pnl > 0:
+                d["wins"] += 1
+            # LEARN: trades arrive oldest-first, so appending keeps
+            # recent chronological — the card takes the last 3.
+            d["recent"].append({
+                "s": str(t.get("symbol") or "?"),
+                "p": round(pnl, 2),
+                "t": stackz_time_et(t.get("time")),
+            })
+            try:
+                dt = datetime.fromisoformat(t.get("time"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                age = (now - dt).total_seconds()
+                if age >= 0 and (d["freshest"] is None or age < d["freshest"]):
+                    d["freshest"] = age
+            except (TypeError, ValueError):
+                pass
     towers = []
     for s in _BOT_CITY_ROSTER:
-        v = per.get(s, {"closed": 0, "pnl": 0.0})
+        v = per.get(s, {"closed": 0, "wins": 0, "pnl": 0.0,
+                        "recent": [], "freshest": None})
+        # LEARN: "strat" rides along so the pulse list can find the
+        # tower's index after the sort below — JS only needs the index.
         if v["closed"] == 0:
             towers.append({"name": "", "color": "#5a5f6e",
-                           "value": 0, "sub": ""})
+                           "value": 0, "sub": "", "strat": s})
         else:
             color = ("#3ddc84" if v["pnl"] > 0
                      else "#ff5f5f" if v["pnl"] < 0 else "#d9a441")
             sign = "+" if v["pnl"] >= 0 else "-"
             towers.append({"name": _short_strategy(s), "color": color,
                            "value": v["closed"],
-                           "sub": f"{sign}${abs(v['pnl']):.2f}"})
+                           "sub": f"{sign}${abs(v['pnl']):.2f}",
+                           "strat": s,
+                           "stats": {
+                               "closed": v["closed"], "wins": v["wins"],
+                               "pnl": round(v["pnl"], 2),
+                               "recent": v["recent"][-3:][::-1],
+                           }})
     # LEARN: busiest skyline reads best — most closed trades first.
     towers.sort(key=lambda t: -t["value"])
+    # LEARN: pulses are honest replays, not live sockets — the page is
+    # a static snapshot, so any close in the last 2h gets a looping
+    # beam until the next snapshot lands. One pulse per strategy.
+    idx_of = {t["strat"]: i for i, t in enumerate(towers) if t["strat"]}
+    pulses = []
+    for s, v in per.items():
+        if (s in idx_of and v["freshest"] is not None
+                and v["freshest"] <= 7200):
+            pulses.append({"i": idx_of[s], "age": int(v["freshest"])})
     total_pnl = sum(v["pnl"] for v in per.values())
     total_closed = sum(v["closed"] for v in per.values())
     psign = "+" if total_pnl >= 0 else "-"
     config = {
         "accent": "#d9a441",
         "towers": towers,
+        "pulses": pulses,
         "dome": {
             "title": "PAPER P&L — NOT REAL MONEY",
             "shortTitle": "PAPER P&L",
@@ -590,6 +778,17 @@ def bot_city_html(snap):
         f'</span><span class="lname">{html.escape(t["name"])}</span>'
         f'<span class="lsub">{html.escape(t["sub"])}</span></div>'
         for t in active)
+    # LEARN: the footer only claims pulses when at least one close is
+    # fresh enough to actually pulse — no phantom promises.
+    pulse_note = " · ✦ PULSE = REAL CLOSE · LAST 2H" if pulses else ""
+    # LEARN: the config rides inside a <script> block, and json.dumps
+    # does NOT escape </script> — a hostile string in trade data could
+    # break out of the block and run. \u-escaping < > & keeps the JSON
+    # identical once JS parses it, with no breakout possible. (The
+    # legend is html.escape'd and the tap card uses textContent, so
+    # this is the only injection surface.)
+    cfg_json = (json.dumps(config).replace("&", "\\u0026")
+                .replace("<", "\\u003c").replace(">", "\\u003e"))
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -603,6 +802,24 @@ justify-content:space-between;align-items:center}}
 .paper{{font-size:10px;letter-spacing:2px;color:#ff5f5f;
 border:1px solid #ff5f5f;border-radius:4px;padding:4px 8px}}
 #city{{width:100%;height:420px;display:block}}
+#stage{{position:relative}}
+/* LEARN: the tap card lives inside #stage so it overlays the canvas
+   bottom; translateY(120%) parks it off-screen until .show slides it up. */
+#tcard{{position:absolute;left:10px;right:10px;bottom:10px;z-index:5;
+background:rgba(10,16,32,.96);border:1px solid #d9a441;border-radius:10px;
+padding:10px 12px;transform:translateY(130%);transition:transform .32s ease;
+box-shadow:0 6px 24px rgba(0,0,0,.5)}}
+#tcard.show{{transform:translateY(0)}}
+#tclose{{position:absolute;top:6px;right:10px;background:none;border:none;
+color:#8a8fa3;font-size:14px;cursor:pointer;padding:4px}}
+#ttitle{{font-size:13px;font-weight:800;letter-spacing:2px;color:#d9a441;
+margin-bottom:6px;padding-right:24px}}
+#tstats{{display:flex;gap:14px;font-size:11px;color:#8a8fa3;margin-bottom:8px}}
+#tstats b{{color:#ece9df;font-size:13px;display:block}}
+.up{{color:#3ddc84}} .dn{{color:#ff5f5f}}
+#trecent{{font-size:11px;color:#8a8fa3}}
+#trecent .rrow{{display:flex;justify-content:space-between;padding:3px 0;
+border-top:1px dashed #1c1f2a}}
 .legendwrap{{padding:10px 16px 4px}}
 .lhead{{font-size:10px;letter-spacing:2px;color:#8a8fa3;margin-bottom:6px}}
 .lrow{{display:flex;align-items:center;gap:10px;padding:6px 0;
@@ -614,12 +831,15 @@ border-bottom:1px dashed #1c1f2a;font-size:12px}}
 border-top:1px solid #1c1f2a;text-align:center}}
 </style></head><body>
 <div class="hd"><h1>⚡ BOT CITY</h1><span class="paper">PAPER ONLY</span></div>
-<canvas id="city"></canvas>
-<div class="legendwrap"><div class="lhead">ACTIVE STRATEGIES · PAPER</div>
+<div id="stage"><canvas id="city"></canvas>
+<div id="tcard"><button id="tclose" aria-label="close">✕</button>
+<div id="ttitle"></div><div id="tstats"></div><div id="trecent"></div></div>
+</div>
+<div class="legendwrap"><div class="lhead">ACTIVE STRATEGIES · PAPER · TAP A TOWER</div>
 {legend_rows}</div>
-<div class="ft">EACH TOWER IS A STRATEGY · HEIGHT = CLOSED TRADES · PAPER ONLY</div>
+<div class="ft">EACH TOWER IS A STRATEGY · HEIGHT = CLOSED TRADES{pulse_note} · PAPER ONLY</div>
 <script>{city_js}</script>
-<script>initCity('city', {json.dumps(config)});</script>
+<script>initCity('city', {cfg_json});</script>
 </body></html>"""
 
 
@@ -884,6 +1104,10 @@ def detail_panel(result, key_prefix=""):
                    label_visibility="collapsed",
                    key=f"{key_prefix}dtf-{symbol}")
           or GF_DEFAULT)
+    chart_kind = (st.pills("Chart type", ["Area", "Candles"],
+                           default="Area", label_visibility="collapsed",
+                           key=f"{key_prefix}dct-{symbol}")
+                  or "Area")
     series = cached_gf_series(symbol, tf)
     closes = [c for _, c in series]
     dates = [ts for ts, _ in series]
@@ -910,7 +1134,21 @@ def detail_panel(result, key_prefix=""):
         f'</div>',
     )
 
-    if len(closes) >= 2:
+    if chart_kind == "Candles":
+        ind_sel = (st.pills("Indicators",
+                            ["SMA20", "EMA20", "BB", "RSI", "MACD"],
+                            default=["SMA20", "RSI"],
+                            selection_mode="multiple",
+                            label_visibility="collapsed",
+                            key=f"{key_prefix}dind-{symbol}")
+                   or [])
+        ohlc = cached_ohlc(symbol, tf)
+        if len(ohlc) >= 2:
+            overlays, subs = _candle_indicators(ohlc, ind_sel)
+            smd(candles_svg(ohlc, overlays=overlays, subpanels=subs))
+        else:
+            st.caption("Candle data unavailable right now.")
+    elif len(closes) >= 2:
         smd(
             gf_chart_svg(closes, dates=dates,
                          intraday=tf in INTRADAY_TIMEFRAMES),
@@ -938,15 +1176,20 @@ def detail_panel(result, key_prefix=""):
     )
 
 
-def watch_card(result, key_prefix=""):
-    """One watched asset, blotter style: price, spark, score, news."""
+def watch_card(result, key_prefix="", spark=None):
+    """One watched asset, blotter style: price, spark, score, news.
+
+    spark: optional pre-fetched close series (e.g. CoinGecko 7-day)
+    used for the sparkline instead of the intraday closes.
+    """
     quote = result["quote"]
     symbol = result["symbol"]
     price, change = quote["price"], quote["change_percent"]
     score = result["score"]
     chg_cls = "up" if change > 0 else "down" if change < 0 else "flat"
 
-    closes = cached_candles(symbol)
+    closes = (spark if spark and len(spark) >= 2
+              else cached_candles(symbol))
     spark = spark_svg(closes)
 
     hi52, lo52 = cached_52w(symbol)
@@ -1271,6 +1514,18 @@ with tab_stocks:
                 f'<span class="bz-gitem">Breadth '
                 f'<b class="up">{up}▲</b> '
                 f'<b class="down">{down}▼</b></span>')
+        macro = cached_macro()
+        if isinstance(macro.get("vix"), (int, float)):
+            # VIX up = fear up: color it red, the market convention.
+            vchg = macro.get("vix_chg") or 0
+            vcls = "down" if vchg > 0 else "up" if vchg < 0 else "flat"
+            glance_bits.append(
+                f'<span class="bz-gitem">VIX '
+                f'<b class="{vcls}">{macro["vix"]:.2f}</b></span>')
+        if isinstance(macro.get("yield10"), (int, float)):
+            glance_bits.append(
+                f'<span class="bz-gitem">10Y '
+                f'<b>{macro["yield10"]:.2f}%</b></span>')
         if glance_bits:
             smd(
                 f'<div class="bz-glance">{"".join(glance_bits)}</div>',
@@ -1584,13 +1839,24 @@ with tab_penny:
 with tab_crypto:
     section("01", "Crypto watch", "Spot prices via Finnhub. "
             "Change is vs. prior close.")
+    dom = cached_cg_dominance()
+    if dom:
+        smd(
+            f'<div class="bz-glance">'
+            f'<span class="bz-gitem">BTC dom '
+            f'<b>{dom["btc"]:.1f}%</b></span>'
+            f'<span class="bz-gitem">ETH dom '
+            f'<b>{dom["eth"]:.1f}%</b></span>'
+            f"</div>",
+        )
     if st.button("Refresh crypto"):
         cached_universe_scan.clear()
+    cg_sparks = {r["symbol"]: r["spark7"] for r in cached_cg_board()}
     crypto_results = cached_universe_scan(tuple(CRYPTO_MAP.values()))
     for res in crypto_results:
         base = res["symbol"].split(":")[-1].replace("USDT", "")
         watch_card({**res, "symbol": base, "sector": "Crypto"},
-                   key_prefix="crypto-")
+                   key_prefix="crypto-", spark=cg_sparks.get(base))
 
 # --- Stackz (paper trading) ---
 with tab_stackz:
