@@ -41,35 +41,55 @@ def _headline_fallback(symbol, news):
             f"headlines for {symbol} say:\n{lines}")
 
 
-async def _gemini_text(session, prompt):
-    """POST a prompt to Gemini, return the text or a fallback message."""
+async def _gemini_text(session, prompt, tries=3):
+    """POST a prompt to Gemini, return the text or a fallback message.
+
+    Retries transient failures (429/503/timeouts) with backoff — the free
+    tier flakes regularly and one shot was dropping AI reads daily.
+    """
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
         f"models/{config.GEMINI_MODEL}:generateContent"
     )
-    try:
-        async with session.post(
-            url,
-            params={"key": config.GEMINI_API_KEY},
-            json={"contents": [{"parts": [{"text": prompt}]}]},
-            timeout=aiohttp.ClientTimeout(total=30),
-        ) as response:
-            if response.status != 200:
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    last_error = "AI analysis failed."
+    for attempt in range(tries):
+        try:
+            async with session.post(
+                url,
+                params={"key": config.GEMINI_API_KEY},
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    candidates = data.get("candidates", [])
+                    if not candidates:
+                        return "AI returned no analysis."
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    text = "\n".join(part.get("text", "")
+                                     for part in parts).strip()
+                    return text or "AI returned no text."
+                if response.status in (429, 503):
+                    retry_after = response.headers.get("Retry-After")
+                    wait = float(retry_after) if retry_after else \
+                        2 ** attempt * 2
+                    logger.warning("Gemini %s (attempt %d/%d), retrying in %ss",
+                                   response.status, attempt + 1, tries, wait)
+                    last_error = ("AI is rate-limited right now — "
+                                  "try again in a minute.")
+                    await asyncio.sleep(min(wait, 30))
+                    continue
                 logger.warning("Gemini API error: %s", response.status)
                 return "AI analysis failed."
-
-            data = await response.json()
-            candidates = data.get("candidates", [])
-            if not candidates:
-                return "AI returned no analysis."
-
-            parts = candidates[0].get("content", {}).get("parts", [])
-            text = "\n".join(part.get("text", "") for part in parts).strip()
-            return text or "AI returned no text."
-
-    except Exception:
-        logger.exception("AI analysis error")
-        return "AI analysis unavailable."
+        except asyncio.TimeoutError:
+            logger.warning("Gemini timeout (attempt %d/%d)", attempt + 1, tries)
+            last_error = "AI analysis unavailable."
+            await asyncio.sleep(2 ** attempt * 2)
+        except Exception:
+            logger.exception("AI analysis error")
+            return "AI analysis unavailable."
+    return last_error
 
 
 async def gemini_probe(session):
