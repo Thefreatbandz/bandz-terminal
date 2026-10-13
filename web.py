@@ -1138,7 +1138,7 @@ def detail_panel(result, key_prefix=""):
         ind_sel = (st.pills("Indicators",
                             ["SMA20", "EMA20", "BB", "RSI", "MACD"],
                             default=["SMA20", "RSI"],
-                            selection_mode="multiple",
+                            selection_mode="multi",
                             label_visibility="collapsed",
                             key=f"{key_prefix}dind-{symbol}")
                    or [])

@@ -130,3 +130,14 @@ def test_parse_stooq_csv_bad_input():
     assert parse_stooq_csv("") == {}
     assert parse_stooq_csv(None) == {}
     assert parse_stooq_csv("Symbol,Date\n") == {}
+
+
+def test_pills_selection_mode_values():
+    """Regression: st.pills selection_mode must be 'single' or 'multi'.
+
+    'multiple' raises StreamlitValueError at runtime (broke Candles mode).
+    """
+    import re
+    src = open("web.py").read()
+    for m in re.finditer(r'selection_mode="([^"]+)"', src):
+        assert m.group(1) in ("single", "multi"), m.group(0)
