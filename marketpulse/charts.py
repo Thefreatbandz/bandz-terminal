@@ -547,6 +547,12 @@ def candles_svg(ohlc, overlays=None, subpanels=(), height=260):
                     f'fill="#8b93a7" font-size="10" font-family="monospace">'
                     f'RSI {vals[-1]:.1f}</text>')
                 legend_bits.append('<tspan fill="#8b93a7">RSI</tspan>')
+            else:
+                parts.append(
+                    f'<text x="{(pad_l + w - pad_r) / 2:.1f}" '
+                    f'y="{y0 + sub_h / 2 + 4:.1f}" text-anchor="middle" '
+                    f'fill="#5b6773" font-size="10" font-family="monospace">'
+                    f'Needs more candles — try 6M</text>')
         elif s == "macd":
             m = [v for v in (ov.get("macd_line") or [])
                  if isinstance(v, (int, float))]
@@ -583,6 +589,12 @@ def candles_svg(ohlc, overlays=None, subpanels=(), height=260):
                                           "#7aa2f7"))
                 legend_bits.append(
                     '<tspan fill="#e5c07b">MACD</tspan>')
+            else:
+                parts.append(
+                    f'<text x="{(pad_l + w - pad_r) / 2:.1f}" '
+                    f'y="{y0 + sub_h / 2 + 4:.1f}" text-anchor="middle" '
+                    f'fill="#5b6773" font-size="10" font-family="monospace">'
+                    f'Needs more candles — try 6M</text>')
         # subpanel frame + label
         parts.append(
             f'<rect x="{pad_l}" y="{y0}" width="{w - pad_l - pad_r}" '
