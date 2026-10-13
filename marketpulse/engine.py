@@ -6,6 +6,7 @@ UI code lives elsewhere; it only formats what these return.
 """
 
 import asyncio
+from datetime import datetime, timedelta
 
 from . import cache, config
 from .ai import generate_ai_analysis
@@ -142,3 +143,44 @@ def breadth_counts(results):
         else:
             flat += 1
     return up, down, flat
+
+
+def group_earnings(earnings, symbols, today):
+    """Split earnings dates into a 7-day board + the rest of the window.
+
+    earnings: {symbol: "YYYY-MM-DD"}; symbols: universe symbol set;
+    today: datetime.date (Eastern).
+    Returns (week, rest):
+      week = [(date, [symbols])] for each of the 7 days today..today+6
+             (days with no reports carry []).
+      rest = [(date, [symbols])] for days 7..30 with reports, sorted.
+    Unparsable dates and out-of-window dates are skipped.
+    """
+    by_date = {}
+    for sym, dstr in (earnings or {}).items():
+        if sym not in symbols:
+            continue
+        try:
+            d = datetime.strptime(dstr, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            continue
+        delta = (d - today).days
+        if 0 <= delta <= 30:
+            by_date.setdefault(d, []).append(sym)
+    week = []
+    for i in range(7):
+        d = today + timedelta(days=i)
+        week.append((d, sorted(by_date.get(d, []))))
+    rest = [(d, sorted(syms)) for d, syms in sorted(by_date.items())
+            if 7 <= (d - today).days <= 30]
+    return week, rest
+
+
+def earnings_day_label(d, today):
+    """'Today — Mon Oct 13' / 'Tomorrow' / 'Wed Oct 14'."""
+    delta = (d - today).days
+    if delta == 0:
+        return f"Today — {d.strftime('%a %b %d')}"
+    if delta == 1:
+        return "Tomorrow"
+    return d.strftime("%a %b %d")

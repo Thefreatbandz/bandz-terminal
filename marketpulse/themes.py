@@ -696,6 +696,17 @@ SHARED_CSS = """
 .tmt span { font-size: 10px; color: #e6edf3; opacity: 0.85; }
 .bz-tm-note { font-size: 11px; color: #5b6773; font-family: monospace;
   margin: 2px 0 4px 2px; }
+
+/* Earnings week board: 7 day rows, ticker chips per report day */
+.bz-eweek { border: 1px solid #1b232d; border-radius: 12px;
+  overflow: hidden; }
+.bz-eday { padding: 10px 14px; border-bottom: 1px solid #141b24; }
+.bz-eday:last-child { border-bottom: 0; }
+.bz-eday-h { font-size: 11px; font-weight: 700; letter-spacing: 1px;
+  text-transform: uppercase; color: #8b98a5; margin-bottom: 8px; }
+.bz-echips { display: flex; flex-wrap: wrap; gap: 6px; }
+.bz-chip.bz-echip { margin-left: 0; font-size: 11px; padding: 4px 10px; }
+.bz-enone { color: #3d4753; font-size: 12px; }
 </style>
 """
 

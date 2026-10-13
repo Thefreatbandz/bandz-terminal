@@ -43,7 +43,8 @@ from marketpulse.charts import (GF_DEFAULT, GF_RANGE_LABEL, GF_TIMEFRAMES,
 from marketpulse.data import (FinnhubClient, coingecko_board,
                               coingecko_dominance, tv_heatmap_scan,
                               yahoo_macro, yahoo_ohlc, yahoo_simple_quote)
-from marketpulse.engine import (breadth_counts, scan_stock, scan_universe,
+from marketpulse.engine import (breadth_counts, earnings_day_label,
+                                group_earnings, scan_stock, scan_universe,
                                 sector_summary)
 from marketpulse.format import (CCY_SYMBOLS, fmt_change, fmt_price,
                                 fmt_price_ccy, fx_rates_from_strip,
@@ -1600,38 +1601,46 @@ with tab_stocks:
                 with st.expander("Watchlist digest", expanded=True):
                     st.markdown(esc_dollar(digest))
 
-        # Earnings calendar: next 30 days, scanned universe only.
-        section("", "Earnings calendar",
-                "Upcoming reports in this universe — next 30 days.")
+        # Earnings: 7-day board up top, rest of the 30-day window below.
+        section("", "Earnings this week",
+                "Reports landing in the next 7 days — Eastern.")
         with st.spinner("Loading earnings dates..."):
             earnings = cached_earnings()
         universe_syms = {r["symbol"] for r in stock_results}
-        today = date.today()
-        upcoming = []
-        for sym, dstr in earnings.items():
-            if sym not in universe_syms:
-                continue
-            try:
-                d = datetime.strptime(dstr, "%Y-%m-%d").date()
-            except (TypeError, ValueError):
-                continue
-            delta = (d - today).days
-            if 0 <= delta <= 30:
-                upcoming.append((d, sym, delta))
-        upcoming.sort()
-        if upcoming:
-            rows = []
-            for d, sym, delta in upcoming[:30]:
-                when = ("today" if delta == 0 else "tomorrow" if delta == 1
-                        else f"in {delta} days")
-                rows.append(f'<div class="bz-witem"><div class="bz-wsym">'
-                            f'{html.escape(sym)}</div>'
-                            f'<p>{fmt_earnings(d.strftime("%Y-%m-%d"))} '
-                            f'<span class="gold">· {when}</span></p></div>')
-            smd(f'<div class="bz-wire">{"".join(rows)}</div>')
-            if len(upcoming) > 30:
-                st.caption(f"+{len(upcoming) - 30} more in the next 30 days.")
+        et_today = datetime.now(ZoneInfo("America/New_York")).date()
+        week, rest = group_earnings(earnings, universe_syms, et_today)
+        if any(syms for _, syms in week):
+            parts = []
+            for d, syms in week:
+                chips = "".join(
+                    f'<span class="bz-chip bz-echip">'
+                    f"{html.escape(s)}</span>"
+                    for s in syms)
+                if not chips:
+                    chips = '<span class="bz-enone">—</span>'
+                parts.append(
+                    f'<div class="bz-eday"><div class="bz-eday-h">'
+                    f"{html.escape(earnings_day_label(d, et_today))}</div>"
+                    f'<div class="bz-echips">{chips}</div></div>')
+            smd(f'<div class="bz-eweek">{"".join(parts)}</div>')
         else:
+            st.caption("No reports this week for this universe.")
+        if rest:
+            n_rest = sum(len(s) for _, s in rest)
+            with st.expander(f"Later this month — {n_rest} more",
+                             expanded=False):
+                rows = []
+                for d, syms in rest:
+                    delta = (d - et_today).days
+                    for sym in syms:
+                        rows.append(
+                            f'<div class="bz-witem"><div class="bz-wsym">'
+                            f"{html.escape(sym)}</div>"
+                            f"<p>{fmt_earnings(d.strftime('%Y-%m-%d'))} "
+                            f'<span class="gold">· in {delta} days</span>'
+                            f"</p></div>")
+                smd(f'<div class="bz-wire">{"".join(rows)}</div>')
+        elif not any(syms for _, syms in week):
             st.caption("No earnings dates in the next 30 days "
                        "for this universe.")
 
